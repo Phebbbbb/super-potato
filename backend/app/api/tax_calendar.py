@@ -10,13 +10,51 @@ from app.services.cache import cache_get, cache_set
 
 router = APIRouter()
 
-# 2026年月度申报截止日（已考虑节假日顺延）
-DEADLINES_2026 = {
-    "2026-01": "2026-01-20", "2026-02": "2026-02-24", "2026-03": "2026-03-16",
-    "2026-04": "2026-04-20", "2026-05": "2026-05-22", "2026-06": "2026-06-15",
-    "2026-07": "2026-07-15", "2026-08": "2026-08-17", "2026-09": "2026-09-15",
-    "2026-10": "2026-10-26", "2026-11": "2026-11-16", "2026-12": "2026-12-15",
+# 中国法定节假日顺延（简化版，覆盖主要假期）
+# 格式: (月, 日, 顺延天数), 如春节7天、国庆7天等
+FIXED_HOLIDAYS: dict[str, int] = {
+    "2026-01": 5,   # 元旦+春节前
+    "2026-02": 9,   # 春节
+    "2026-04": 5,   # 清明+五一前
+    "2026-05": 7,   # 五一
+    "2026-10": 11,  # 国庆+中秋
+    "2027-01": 5,
+    "2027-02": 9,
+    "2027-04": 5,
+    "2027-05": 7,
+    "2027-10": 11,
 }
+
+
+def calc_deadline(period: str) -> str:
+    """
+    动态计算申报截止日：次月15日，遇周末顺延至周一，节假日额外顺延。
+    无硬编码年份限制。
+    """
+    parts = period.split("-")
+    y, m = int(parts[0]), int(parts[1])
+
+    # 次月15日
+    if m == 12:
+        next_y, next_m = y + 1, 1
+    else:
+        next_y, next_m = y, m + 1
+
+    deadline = date(next_y, next_m, 15)
+
+    # 周末顺延至周一
+    while deadline.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        deadline += timedelta(days=1)
+
+    # 节假日额外顺延
+    deadline_str = deadline.isoformat()[:7]
+    extra_days = FIXED_HOLIDAYS.get(deadline_str, 0)
+    if extra_days > 0:
+        deadline += timedelta(days=extra_days)
+
+    return deadline.isoformat()
+
+
 
 TAX_TYPES = ["vat", "individual_income", "corporate_income", "stamp_duty"]
 
@@ -34,7 +72,7 @@ def get_calendar(client_id: str = Query(None), months_ahead: int = Query(3),
     items = []
     for i in range(months_ahead):
         month_key = f"{today.year}-{today.month + i:02d}" if today.month + i <= 12 else f"{today.year + 1}-{(today.month + i - 12):02d}"
-        deadline = DEADLINES_2026.get(month_key, f"{month_key}-15")
+        deadline = calc_deadline(month_key)
 
         for tax_type in TAX_TYPES:
             filing = db.query(TaxFiling).filter(
@@ -87,7 +125,7 @@ def risk_check(client_id: str = Query(None), db: Session = Depends(get_db), _=De
         risks.append({"level": "B", "type": "zero_voucher", "message": f"{current_month} 本月暂无已确认凭证，可能漏记账", "suggestion": "请检查本月票据是否已全部录入并确认"})
 
     # === 2. 申报截止日风险 ===
-    deadline = DEADLINES_2026.get(current_month, f"{current_month}-15")
+    deadline = calc_deadline(current_month)
     deadline_date = date.fromisoformat(deadline)
     days_left = (deadline_date - today).days
     if 0 <= days_left <= 5:

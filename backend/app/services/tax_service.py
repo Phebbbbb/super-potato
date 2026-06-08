@@ -122,6 +122,68 @@ def calculate_surtax(db: Session, period: str):
     }
 
 
+def calculate_stamp_duty(db: Session, period: str) -> dict:
+    """计算印花税"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 购销合同金额 = 收入 + 成本（简化：按收入+成本合计算印花税）
+    _, income = sum_entries(vouchers, "6001")  # 收入类贷方
+    cost_debit, _ = sum_entries(vouchers, "6401")  # 成本借方
+    # 购销合同: 价款 × 0.3‰
+    taxable_amount = round(income + cost_debit, 2)
+    tax_payable = round(taxable_amount * 0.0003, 2)
+    return {
+        "tax_type": "stamp_duty",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": 0.0003,
+        "tax_payable": tax_payable,
+    }
+
+
+def calculate_property_tax(db: Session, period: str) -> dict:
+    """计算房产税（从价计征简化版）"""
+    # 从固定资产科目（1601）借方余额估算房产原值
+    vouchers = get_confirmed_vouchers(db, period)
+    property_debit, property_credit = sum_entries(vouchers, "1601")
+    # 房产原值 × (1-30%) × 1.2% / 12（月）
+    property_value = round(property_debit - property_credit, 2)
+    monthly_tax = round(property_value * 0.7 * 0.012 / 12, 2) if property_value > 0 else 0
+    return {
+        "tax_type": "property_tax",
+        "period": period,
+        "property_original_value": property_value,
+        "deduction_ratio": 0.3,
+        "annual_tax_rate": 0.012,
+        "tax_payable": monthly_tax,
+    }
+
+
+def calculate_land_use_tax(db: Session, period: str) -> dict:
+    """计算城镇土地使用税（简化版，需手动配置占地面积和适用税额）"""
+    # 城镇土地使用税需要占地面积和适用税额，通常从配置读取
+    # 此处使用默认值，实际使用时需在系统配置中设置
+    from app.models.system_config import SystemConfig
+    land_area = 0.0  # 平方米
+    unit_tax = 1.5    # 元/平方米·年（默认小城市标准）
+    config = db.query(SystemConfig).filter(SystemConfig.config_key == "land_use_tax_config").first()
+    if config and config.config_value:
+        import json as _json
+        try:
+            cfg = _json.loads(config.config_value) if isinstance(config.config_value, str) else config.config_value
+            land_area = float(cfg.get("land_area", 0))
+            unit_tax = float(cfg.get("unit_tax", 1.5))
+        except Exception:
+            pass
+    monthly_tax = round(land_area * unit_tax / 12, 2)
+    return {
+        "tax_type": "land_use_tax",
+        "period": period,
+        "land_area": land_area,
+        "unit_tax": unit_tax,
+        "tax_payable": monthly_tax,
+    }
+
+
 def preview_filing(db: Session, tax_type: str, period: str, taxpayer_type: str = "small"):
     """预览申报数据（不保存）"""
     if tax_type == "vat":
@@ -130,5 +192,11 @@ def preview_filing(db: Session, tax_type: str, period: str, taxpayer_type: str =
         return calculate_corporate_income(db, period)
     elif tax_type == "surtax":
         return calculate_surtax(db, period)
+    elif tax_type == "stamp_duty":
+        return calculate_stamp_duty(db, period)
+    elif tax_type == "property_tax":
+        return calculate_property_tax(db, period)
+    elif tax_type == "land_use_tax":
+        return calculate_land_use_tax(db, period)
     else:
         return {"tax_type": tax_type, "period": period, "message": "暂不支持该税种自动计算"}

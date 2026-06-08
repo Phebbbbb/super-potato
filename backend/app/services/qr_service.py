@@ -33,10 +33,12 @@ def create_trace(
     target_id: str,
     stage: str,
     parent_qr_id: str | None = None,
+    base_url: str | None = None,
 ) -> QRTrace:
-    """创建一条 QR 追溯记录"""
+    """创建一条 QR 追溯记录。base_url 可通过 API 层传入以适配生产环境（否则使用配置值）"""
     qr_id = str(uuid.uuid4())
-    scan_url = f"{settings.base_url}/api/qr/scan/{qr_id}"
+    effective_base = base_url or settings.base_url
+    scan_url = f"{effective_base}/api/qr/scan/{qr_id}"
 
     # 生成 QR 码图片
     qr_path = generate_qr(scan_url, f"{target_type}_{target_id}_{stage}.png")
