@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Tabs, Table, Form, Input, Select, Button, Space, App, Tag, Typography, Modal } from 'antd'
-import { PlusOutlined, SaveOutlined, HistoryOutlined, ReloadOutlined } from '@ant-design/icons'
-import { accountApi, settingsApi, versionApi } from '@/services/api'
+import { Card, Tabs, Table, Form, Input, Select, Button, Space, App, Tag, Typography, Modal, DatePicker } from 'antd'
+import { PlusOutlined, SaveOutlined, HistoryOutlined, ReloadOutlined, DownloadOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons'
+import { accountApi, settingsApi, auditApi } from '@/services/api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
+const { RangePicker } = DatePicker
 
 function TaxAutoConfig() {
   const { message } = App.useApp()
@@ -72,7 +73,10 @@ export default function Settings() {
 
   // 操作日志
   const [auditLogs, setAuditLogs] = useState<any[]>([])
+  const [auditTotal, setAuditTotal] = useState(0)
   const [auditLoading, setAuditLoading] = useState(false)
+  const [auditPage, setAuditPage] = useState(1)
+  const [auditFilters, setAuditFilters] = useState<{ action?: string; target_type?: string; date_from?: string; date_to?: string }>({})
 
   const loadAccounts = async () => {
     try {
@@ -83,13 +87,35 @@ export default function Settings() {
     } catch { /* network unavailable */ }
   }
 
-  const loadAuditLogs = async () => {
+  const loadAuditLogs = async (page = 1, filters: any = auditFilters) => {
     setAuditLoading(true)
     try {
-      const res: any = await versionApi.recent(100)
-      setAuditLogs(res.data?.items || [])
+      const params: any = { page, page_size: 50, ...filters }
+      const res: any = await auditApi.logs(params)
+      setAuditLogs(res.items || [])
+      setAuditTotal(res.total || 0)
+      setAuditPage(page)
     } catch { message.error('加载操作日志失败') }
     setAuditLoading(false)
+  }
+
+  const handleExport = async () => {
+    try {
+      const res: any = await auditApi.exportLogs(auditFilters)
+      const url = window.URL.createObjectURL(new Blob([res.data || res]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `操作日志_${dayjs().format('YYYY-MM-DD_HHmmss')}.csv`
+      a.click()
+      window.URL.revokeObjectURL(url)
+      message.success('导出成功')
+    } catch { message.error('导出失败') }
+  }
+
+  const handleFilterChange = (key: string, value: any) => {
+    const next = { ...auditFilters, [key]: value || undefined }
+    if (!value) delete next[key as keyof typeof next]
+    setAuditFilters(next)
   }
 
   useEffect(() => { loadAuditLogs() }, [])
@@ -179,17 +205,51 @@ export default function Settings() {
       label: <span><HistoryOutlined /> 操作日志</span>,
       children: (
         <div>
-          <div style={{ marginBottom: 16 }}>
-            <Button icon={<ReloadOutlined />} onClick={loadAuditLogs} loading={auditLoading}>刷新</Button>
-            <Text type="secondary" style={{ marginLeft: 16 }}>所有增删改操作自动记录，支持版本回溯</Text>
-          </div>
+          <Space wrap style={{ marginBottom: 12 }}>
+            <Select
+              allowClear placeholder="操作类型" style={{ width: 120 }}
+              value={auditFilters.action}
+              onChange={v => handleFilterChange('action', v)}
+              options={[
+                { label: '创建', value: 'created' }, { label: '修改', value: 'updated' },
+                { label: '删除', value: 'deleted' }, { label: '确认', value: 'confirmed' },
+                { label: '回滚', value: 'reverted' }, { label: '状态变更', value: 'status_change' },
+              ]}
+            />
+            <Select
+              allowClear placeholder="对象类型" style={{ width: 120 }}
+              value={auditFilters.target_type}
+              onChange={v => handleFilterChange('target_type', v)}
+              options={[
+                { label: '凭证', value: 'voucher' }, { label: '发票', value: 'invoice' },
+                { label: '申报', value: 'filing' }, { label: '票据', value: 'document' },
+                { label: '客户', value: 'client' }, { label: '员工', value: 'employee' },
+              ]}
+            />
+            <RangePicker
+              onChange={(_, [from, to]) => {
+                handleFilterChange('date_from', from || undefined)
+                handleFilterChange('date_to', to || undefined)
+              }}
+            />
+            <Button icon={<SearchOutlined />} onClick={() => loadAuditLogs(1)}>筛选</Button>
+            <Button icon={<ClearOutlined />} onClick={() => { setAuditFilters({}); loadAuditLogs(1, {}); }}>重置</Button>
+            <Button icon={<DownloadOutlined />} onClick={handleExport}>导出CSV</Button>
+            <Button icon={<ReloadOutlined />} onClick={() => loadAuditLogs()} loading={auditLoading} />
+          </Space>
           <Table
             dataSource={auditLogs}
             rowKey="id"
             size="small"
-            pagination={false}
             loading={auditLoading}
             locale={{ emptyText: '暂无操作记录' }}
+            pagination={{
+              current: auditPage,
+              pageSize: 50,
+              total: auditTotal,
+              showTotal: t => `共 ${t} 条`,
+              onChange: p => loadAuditLogs(p),
+            }}
             columns={[
               { title: '时间', dataIndex: 'created_at', width: 170, render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD HH:mm:ss') : '-' },
               { title: '操作人', dataIndex: 'operator', width: 120 },
@@ -197,20 +257,20 @@ export default function Settings() {
                 title: '操作', dataIndex: 'action', width: 100,
                 render: (v: string) => {
                   const m: Record<string, { color: string; text: string }> = {
-                    created: { color: 'green', text: '创建' },
-                    updated: { color: 'blue', text: '修改' },
-                    deleted: { color: 'red', text: '删除' },
-                    confirmed: { color: 'cyan', text: '确认' },
-                    reverted: { color: 'orange', text: '回滚' },
+                    created: { color: 'green', text: '创建' }, updated: { color: 'blue', text: '修改' },
+                    deleted: { color: 'red', text: '删除' }, confirmed: { color: 'cyan', text: '确认' },
+                    reverted: { color: 'orange', text: '回滚' }, status_change: { color: 'purple', text: '状态变更' },
+                    approved: { color: 'green', text: '通过' }, rejected: { color: 'red', text: '驳回' },
                   }
                   return <Tag color={m[v]?.color}>{m[v]?.text || v}</Tag>
                 },
               },
-              { title: '对象类型', dataIndex: 'target_type', width: 120, render: (v: string) => {
-                const t: Record<string, string> = { voucher: '凭证', invoice: '发票', filing: '申报', document: '票据', client: '客户', employee: '员工' }
+              { title: '对象类型', dataIndex: 'target_type', width: 100, render: (v: string) => {
+                const t: Record<string, string> = { voucher: '凭证', invoice: '发票', filing: '申报', document: '票据', client: '客户', employee: '员工', payroll: '工资', account: '科目' }
                 return t[v] || v
               }},
-              { title: '对象ID', dataIndex: 'target_id', width: 100, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v?.slice(0, 8)}</Text> },
+              { title: '对象ID', dataIndex: 'target_id', width: 90, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v?.slice(0, 8)}</Text> },
+              { title: '详情', dataIndex: 'detail', ellipsis: true, render: (v: string) => v ? <Text type="secondary" style={{ fontSize: 11, maxWidth: 200 }} ellipsis>{v}</Text> : '-' },
             ]}
           />
         </div>
@@ -218,7 +278,7 @@ export default function Settings() {
     },
     {
       key: 'tax_auto',
-      label: '税务自动化',
+      label: '电子税务局',
       children: <TaxAutoConfig />,
     },
     {

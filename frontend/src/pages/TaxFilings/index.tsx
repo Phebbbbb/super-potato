@@ -382,7 +382,7 @@ export default function TaxFilings() {
               </Descriptions.Item>
               <Descriptions.Item label="审核人">{selected.reviewer || '-'}</Descriptions.Item>
               <Descriptions.Item label="申报时间">{selected.filed_at ? selected.filed_at.slice(0, 19) : '-'}</Descriptions.Item>
-              <Descriptions.Item label="RPA任务">{selected.rpa_task_id?.slice(0, 8) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="关联任务">{selected.rpa_task_id?.slice(0, 8) || '-'}</Descriptions.Item>
             </Descriptions>
             <Title level={5}>申报数据</Title>
             {renderFilingResult(selected.filing_result)}

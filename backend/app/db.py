@@ -38,5 +38,6 @@ def init_db():
     from app.models.bank import BankAccount, BankStatementLine, ImportBatch
     from app.models.field_task import FieldTask
     from app.models.invoice import Invoice
+    from app.models.tax_announcement import TaxAnnouncement
 
     Base.metadata.create_all(bind=engine)

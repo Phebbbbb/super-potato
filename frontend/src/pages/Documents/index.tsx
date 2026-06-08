@@ -3,7 +3,7 @@ import { Card, Upload, Table, Button, Space, Tag, Modal, Image, Input, Form, Inp
 import { InboxOutlined, QrcodeOutlined, DeleteOutlined, EyeOutlined, EditOutlined, HistoryOutlined, RocketOutlined, CheckCircleOutlined, WarningOutlined, CloseCircleOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
-import { documentApi, feedbackApi, rpaApi } from '@/services/api'
+import { documentApi, feedbackApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
 import EmptyState from '@/components/EmptyState'
 import SkeletonTable from '@/components/SkeletonTable'
@@ -96,14 +96,7 @@ export default function Documents() {
             okText: '开始自动处理',
             cancelText: '稍后手动处理',
             onOk: async () => {
-              setProcessing(true)
-              try {
-                const res: any = await rpaApi.autoProcess(currentClientId || '')
-                setProcessResult(res)
-              } catch (e: any) {
-                message.error(e?.response?.data?.detail || '自动加工失败')
-                setProcessing(false)
-              }
+              message.info('RPA 模块即将上线，敬请期待')
             },
           })
         }, 1500)
@@ -130,33 +123,14 @@ export default function Documents() {
 
   // 手动触发全自动加工
   const handleManualProcess = async () => {
-    if (!currentClientId) { message.warning('请先选择客户'); return }
-    setProcessing(true)
-    setProcessResult(null)
-    try {
-      const res: any = await rpaApi.autoProcess(currentClientId)
-      setProcessResult(res)
-      fetchDocuments()
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || '自动加工失败')
-    }
-    setProcessing(false)
+    message.info('RPA 模块即将上线，敬请期待')
   }
 
   // 一键申报提交
   const [submitting, setSubmitting] = useState(false)
   const [submitResult, setSubmitResult] = useState<any>(null)
   const handleAutoSubmit = async () => {
-    if (!currentClientId) return
-    setSubmitting(true)
-    try {
-      const res: any = await rpaApi.autoSubmitFilings(currentClientId)
-      setSubmitResult(res)
-      message.success(res.message)
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.detail || '申报提交失败，请检查电子税务局凭据配置')
-    }
-    setSubmitting(false)
+    message.info('RPA 模块即将上线，敬请期待')
   }
 
   // 跳转到报税中心

@@ -62,12 +62,6 @@ export const clientApi = {
   delete: (id: string) => api.delete(`/clients/${id}`),
 }
 
-// ===== RPA 自动化 =====
-export const rpaApi = {
-  autoProcess: (clientId: string) => api.post(`/rpa/auto-process?client_id=${clientId}`),
-  autoSubmitFilings: (clientId: string) => api.post(`/rpa/auto-submit-filings?client_id=${clientId}`),
-}
-
 // ===== 原始凭证 =====
 export const documentApi = {
   list: (params: any) => api.get('/documents/', { params }),
@@ -189,6 +183,8 @@ export const auditApi = {
   summary: (params: any) => api.get('/audit/summary', { params }),
   pendingVouchers: (params: any) => api.get('/audit/pending-vouchers', { params }),
   recentAudits: (params: any) => api.get('/audit/recent-audits', { params }),
+  logs: (params: any) => api.get('/audit/logs', { params }),
+  exportLogs: (params: any) => api.get('/audit/logs/export', { params, responseType: 'blob' }),
 }
 
 // ===== 数电票开票 =====
@@ -218,6 +214,12 @@ export const versionApi = {
   revert: (targetType: string, targetId: string, versionId: string) =>
     api.post(`/version/revert/${targetType}/${targetId}?version_id=${versionId}`),
   recent: (limit?: number) => api.get('/version/recent', { params: { limit: limit || 50 } }),
+}
+
+// ===== 官方公告 =====
+export const announcementApi = {
+  list: (limit?: number) => api.get('/announcements/', { params: { limit: limit || 10 } }),
+  refresh: () => api.post('/announcements/refresh'),
 }
 
 // ===== 系统运维 =====

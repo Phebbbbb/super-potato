@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, Table, Button, Space, Tag, Modal, Form, Input, DatePicker, Select, InputNumber, App, Descriptions, Row, Col, Typography } from 'antd'
 import { PlusOutlined, RobotOutlined, CheckOutlined, EyeOutlined, QrcodeOutlined, EditOutlined, CloseOutlined, HistoryOutlined, RocketOutlined, InboxOutlined } from '@ant-design/icons'
-import { voucherApi, documentApi, feedbackApi, rpaApi } from '@/services/api'
+import { voucherApi, documentApi, feedbackApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
 import SkeletonTable from '@/components/SkeletonTable'
 import EmptyState from '@/components/EmptyState'
@@ -179,28 +179,9 @@ export default function Vouchers() {
 
   // === 全自动加工链 ===
   const [autoLoading, setAutoLoading] = useState(false)
-  const handleAutoProcess = async () => {
+  const handleAutoProcess = () => {
     if (!currentClientId) { message.warning('请先选择客户'); return }
-    setAutoLoading(true)
-    try {
-      const res: any = await rpaApi.autoProcess(currentClientId)
-      Modal.info({
-        title: '全自动加工完成',
-        width: 600,
-        content: (
-          <div>
-            <p style={{ fontSize: 16, fontWeight: 500, marginBottom: 12 }}>{res.summary}</p>
-            {(res.details || []).map((d: string, i: number) => (
-              <p key={i} style={{ margin: 4, fontFamily: 'monospace', fontSize: 13 }}>{d}</p>
-            ))}
-          </div>
-        ),
-      })
-      fetchVouchers()
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || '自动加工失败')
-    }
-    setAutoLoading(false)
+    message.info('RPA 模块即将上线，敬请期待')
   }
 
   // === 驳回 ===

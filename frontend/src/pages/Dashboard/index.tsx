@@ -4,9 +4,9 @@ import {
   BookOutlined, DollarOutlined, AuditOutlined,
   RobotOutlined, QrcodeOutlined, FileTextOutlined,
   BankOutlined, EnvironmentOutlined, CustomerServiceOutlined,
-  SafetyOutlined, InboxOutlined, ThunderboltOutlined,
+  SafetyOutlined, InboxOutlined,
 } from '@ant-design/icons'
-import { reportApi, voucherApi, documentApi, filingApi, rpaApi } from '@/services/api'
+import { reportApi, voucherApi, documentApi, filingApi, announcementApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
@@ -19,7 +19,7 @@ export default function Dashboard() {
   const [vouchers, setVouchers] = useState<any[]>([])
   const [documents, setDocuments] = useState<any[]>([])
   const [filings, setFilings] = useState<any[]>([])
-  const [autoProcessing, setAutoProcessing] = useState(false)
+  const [announcements, setAnnouncements] = useState<any[]>([])
   const [data, setData] = useState<any>({
     monthly_voucher_count: 0, monthly_income: 0, monthly_expense: 0, estimated_tax: 0, risk_count: 0,
   })
@@ -36,11 +36,13 @@ export default function Dashboard() {
       voucherApi.list({ page: 1, page_size: 500, client_id: currentClientId || undefined }),
       documentApi.list({ ...params, page: 1 }),
       filingApi.list({ ...params, page: 1 }),
-    ]).then(([dash, vRes, dRes, fRes]: any[]) => {
+      announcementApi.list(5),
+    ]).then(([dash, vRes, dRes, fRes, aRes]: any[]) => {
       if (dash) setData((prev: any) => ({ ...prev, ...dash }))
       setVouchers(vRes?.items || [])
       setDocuments(dRes?.items || [])
       setFilings(fRes?.items || [])
+      setAnnouncements(aRes?.items || [])
       setLoading(false)
     }).catch((err) => {
       setError(err?.detail || '加载数据失败')
@@ -49,19 +51,6 @@ export default function Dashboard() {
   }
 
   useEffect(() => { fetchData() }, [currentClientId])
-
-  const handleAutoProcess = async () => {
-    if (!currentClientId) return
-    setAutoProcessing(true)
-    try {
-      const res: any = await rpaApi.autoProcess(currentClientId)
-      message.success(res?.summary || '自动加工完成')
-      fetchData()
-    } catch (err: any) {
-      message.error(err?.detail || '自动加工失败')
-    }
-    setAutoProcessing(false)
-  }
 
   const statCards = [
     { title: '本期待申报税种', value: filings.filter((f: any) => f.status === 'pending').length, suffix: '项', period: `${dayjs().format('YYYY年M月')}`, color: '#2563eb', link: '/tax-filings' },
@@ -86,7 +75,7 @@ export default function Dashboard() {
     { title: '票据追溯', icon: <QrcodeOutlined />, desc: 'QR 全链路溯源查询', link: '/trace' },
     { title: '外勤任务', icon: <EnvironmentOutlined />, desc: '任务分派 · 现场留痕', link: '/field-tasks' },
     { title: '法规查询', icon: <CustomerServiceOutlined />, desc: '财税政策智能问答', link: '/ai-agent' },
-    { title: 'RPA 自动化', icon: <RobotOutlined />, desc: '自动扫描 · 一键加工', link: '/rpa-tasks' },
+    { title: 'RPA 自动化', icon: <RobotOutlined />, desc: '自动扫描 · 一键加工', link: null },
     { title: '系统设置', icon: <AuditOutlined />, desc: '科目 · 用户 · 配置', link: '/settings' },
   ]
 
@@ -193,38 +182,23 @@ export default function Dashboard() {
         ))}
       </Row>
 
-      {/* 自动化管道 — 核心竞争优势 */}
-      <div className="biz-card" style={{ marginTop: 12, padding: '12px 16px', background: 'linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)', border: '1px solid #dbeafe', borderRadius: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <ThunderboltOutlined style={{ fontSize: 22, color: '#2563eb' }} />
-            <div>
-              <Text strong style={{ fontSize: 14 }}>全自动财税管道</Text>
-              <br />
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                票据 OCR → AI 记账 → 自动申报 → Playwright 提交电子税务局
-                &nbsp;·&nbsp; 零 RPA 授权费，年省 ¥3,000-8,000
-              </Text>
+      {/* 国家税务总局最新公告 */}
+      {announcements.length > 0 && (
+        <div className="biz-card" style={{ marginTop: 12, padding: '12px 16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <Text strong style={{ fontSize: 13 }}>国家税务总局最新公告</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>每2小时自动更新</Text>
+          </div>
+          {announcements.slice(0, 5).map((item: any) => (
+            <div key={item.id} style={{ marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, color: '#1e3a5f' }}>
+                {item.title}
+              </a>
+              {item.pub_date && <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>{item.pub_date}</Text>}
             </div>
-          </div>
-          <Button
-            type="primary"
-            size="middle"
-            icon={<ThunderboltOutlined />}
-            loading={autoProcessing}
-            onClick={handleAutoProcess}
-            disabled={!currentClientId}
-          >
-            一键自动加工
-          </Button>
+          ))}
         </div>
-        {error && (
-          <div style={{ marginTop: 8, padding: '6px 12px', background: '#fef2f2', borderRadius: 4, border: '1px solid #fecaca' }}>
-            <Text type="danger" style={{ fontSize: 12 }}>{error}</Text>
-            <Button type="link" size="small" onClick={fetchData} style={{ marginLeft: 8 }}>重试</Button>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* 高频业务 */}
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
@@ -247,8 +221,8 @@ export default function Dashboard() {
         <Row gutter={[8, 8]} style={{ marginTop: 6 }}>
           {bizEntries.map(entry => (
             <Col xs={12} sm={8} md={6} lg={4} xl={3} key={entry.title}>
-              <div className="quick-card" onClick={() => navigate(entry.link)}
-                style={{ padding: '12px 8px', textAlign: 'center' }}>
+              <div className="quick-card" onClick={() => { entry.link ? navigate(entry.link) : message.info('RPA 模块即将上线，敬请期待') }}
+                style={{ padding: '12px 8px', textAlign: 'center', opacity: entry.link ? 1 : 0.6 }}>
                 <div style={{ fontSize: 20, color: '#2563eb', marginBottom: 4 }}>{entry.icon}</div>
                 <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>{entry.title}</div>
                 <Text type="secondary" style={{ fontSize: 11 }}>{entry.desc}</Text>
@@ -271,23 +245,14 @@ export default function Dashboard() {
         <Tabs items={tabItems} />
       </div>
 
-      {/* 政策公告 */}
+      {/* AI 税务助手入口 */}
       <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
         <Col span={24}>
-          <div className="biz-card" style={{ padding: '12px 16px' }}>
-            <Text strong style={{ fontSize: 13 }}>政策法规公告</Text>
-            <div style={{ marginTop: 8, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-              {[
-                { title: '关于2026年增值税申报期限的通知', date: '2026-05-30', source: '国家税务总局' },
-                { title: '关于延续实施企业所得税优惠政策的公告', date: '2026-05-15', source: '财政部 税务总局' },
-                { title: '电子发票全流程管理规范（试行）', date: '2026-04-20', source: '国家税务总局' },
-              ].map((item, i) => (
-                <div key={i} style={{ cursor: 'pointer', flex: '1 1 280px', minWidth: 200 }}
-                  onClick={() => navigate('/ai-agent')}>
-                  <div style={{ fontSize: 13, color: '#334155', marginBottom: 2 }}>{item.title}</div>
-                  <Text type="secondary" style={{ fontSize: 11 }}>{item.date} · {item.source}</Text>
-                </div>
-              ))}
+          <div className="biz-card" style={{ padding: '12px 16px', cursor: 'pointer' }} onClick={() => navigate('/ai-agent')}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CustomerServiceOutlined style={{ fontSize: 18, color: '#2563eb' }} />
+              <Text strong style={{ fontSize: 13 }}>AI 税务助手</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>— 财税政策智能问答，仅供参考，不构成法律意见</Text>
             </div>
           </div>
         </Col>

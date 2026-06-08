@@ -117,3 +117,45 @@ body {
 .data-masked:hover {
   filter: none;
 }
+
+/* ===== 响应式适配 ===== */
+@media (max-width: 768px) {
+  .mobile-header .ant-select {
+    font-size: 12px;
+  }
+
+  .content-card {
+    border-radius: 4px !important;
+  }
+
+  /* 表格在小屏水平滚动 */
+  .ant-table {
+    font-size: 12px;
+  }
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td {
+    padding: 8px 8px !important;
+  }
+
+  /* 卡片在小屏全宽 */
+  .ant-card {
+    border-radius: 4px;
+  }
+
+  /* Form 在小屏单列 */
+  .ant-form-inline .ant-form-item {
+    margin-right: 0;
+    margin-bottom: 8px;
+  }
+
+  /* 隐藏非关键列 */
+  .hide-on-mobile {
+    display: none !important;
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    font-size: 13px;
+  }
+}

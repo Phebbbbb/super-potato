@@ -1,0 +1,108 @@
+# ============================================================
+# 智能财税系统 — 生产环境 Docker 部署
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 查看日志: docker compose logs -f backend
+# ============================================================
+
+version: "3.9"
+
+services:
+  # ========== PostgreSQL 数据库 ==========
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-smarttax}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ChangeMeInProduction}
+      POSTGRES_DB: ${DB_NAME:-smarttax}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-smarttax} -d ${DB_NAME:-smarttax}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== Redis 缓存 ==========
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-ChangeMeInProduction}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ========== FastAPI 后端 ==========
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-smarttax}:${DB_PASSWORD:-ChangeMeInProduction}@postgres:5432/${DB_NAME:-smarttax}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY}
+      REDIS_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-ChangeMeInProduction}
+      BASE_URL: ${BASE_URL:-http://localhost:8000}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+    volumes:
+      - backend_uploads:/app/uploads
+      - backend_qrcodes:/app/qrcodes
+      - backend_logs:/app/logs
+      - backend_backups:/app/backups
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ========== Nginx (前端静态资源 + API 反代) ==========
+  nginx:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_uploads:
+  backend_qrcodes:
+  backend_logs:
+  backend_backups:
