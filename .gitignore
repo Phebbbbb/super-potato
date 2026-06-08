@@ -53,3 +53,6 @@ screenshots/
 
 # === 上传文件 ===
 uploads/
+
+# === 生成的二维码 ===
+qrcodes/
