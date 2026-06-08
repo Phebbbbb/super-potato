@@ -1,0 +1,55 @@
+# === 敏感文件 ===
+.jwt_secret
+*.jwt_secret
+.encryption_key
+*.encryption_key
+.env
+.env.*
+*.pem
+*.key
+
+# === 数据库 ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === 备份 ===
+backups/
+*.backup
+
+# === 日志 ===
+logs/
+*.log
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+*.egg
+.venv/
+venv/
+env/
+
+# === Node ===
+node_modules/
+dist/
+.vite/
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Playwright 截图 ===
+screenshots/
+
+# === 上传文件 ===
+uploads/

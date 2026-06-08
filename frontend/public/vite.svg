@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景圆角方块 -->
+  <rect x="5" y="5" width="90" height="90" rx="18" fill="url(#blue)"/>
+
+  <!-- 抽象"爻"字：上下两横，白色线条 -->
+  <!-- 上横 -->
+  <g transform="translate(50,35) rotate(45)">
+    <rect x="-22" y="-5" width="44" height="10" rx="5" fill="#fff" opacity="0.95"/>
+  </g>
+  <!-- 下横 -->
+  <g transform="translate(50,65) rotate(45)">
+    <rect x="-22" y="-5" width="44" height="10" rx="5" fill="#fff" opacity="0.95"/>
+  </g>
+
+  <!-- 四个角点 -->
+  <circle cx="24" cy="24" r="3" fill="#fff" opacity="0.8"/>
+  <circle cx="76" cy="24" r="3" fill="#fff" opacity="0.8"/>
+  <circle cx="24" cy="76" r="3" fill="#fff" opacity="0.8"/>
+  <circle cx="76" cy="76" r="3" fill="#fff" opacity="0.8"/>
+</svg>

@@ -1,0 +1,119 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  color: #1e293b;
+  background: #f1f5f9;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 统计卡片 */
+.stat-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+.stat-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  transform: translateY(-1px);
+}
+
+/* 快捷入口卡片 */
+.quick-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, background 0.2s ease, transform 0.15s ease;
+}
+.quick-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  background: #fafbfc;
+  transform: translateY(-2px);
+}
+
+/* 业务卡片 */
+.biz-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+/* 风控提示文字 */
+.risk-warning {
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+/* 合规备注小字 */
+.compliance-note {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+/* 法律提示条 */
+.legal-notice {
+  font-weight: 500;
+  color: #475569;
+  font-size: 13px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: #fffbeb;
+  border-left: 3px solid #d97706;
+  border-radius: 0 6px 6px 0;
+}
+
+/* 底部信息栏 */
+.footer-bar {
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  padding: 14px 24px;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.8;
+}
+.footer-bar a {
+  color: #64748b;
+  text-decoration: none;
+}
+.footer-bar a:hover {
+  color: #2563eb;
+}
+
+/* 数据脱敏 */
+.data-masked {
+  filter: blur(4px);
+  cursor: pointer;
+  transition: filter 0.2s;
+}
+.data-masked:hover {
+  filter: none;
+}
