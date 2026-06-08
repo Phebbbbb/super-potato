@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.db import get_db
-from app.services.report_service import dashboard_data, trial_balance, income_statement, balance_sheet
+from app.services.report_service import dashboard_data, trial_balance, income_statement, balance_sheet, cash_flow_statement
 from app.services.qr_service import create_trace
 from app.services.cache import cache_get, cache_set
 
@@ -77,6 +77,16 @@ def get_balance_sheet(period: str = Query(...), db: Session = Depends(get_db)):
     }
 
 
+@router.get("/cash-flow")
+def get_cash_flow(period: str = Query(...), db: Session = Depends(get_db)):
+    """现金流量表"""
+    sections = cash_flow_statement(db, period)
+    return {
+        "period": period,
+        "sections": sections,
+    }
+
+
 @router.get("/export")
 def export_report(report_type: str, period: str, db: Session = Depends(get_db)):
     """导出报表（返回 JSON 数据，前端可进一步处理为 Excel）"""
@@ -86,6 +96,8 @@ def export_report(report_type: str, period: str, db: Session = Depends(get_db)):
         data = income_statement(db, period)
     elif report_type == "balance-sheet":
         data = balance_sheet(db, period)
+    elif report_type == "cash-flow":
+        data = cash_flow_statement(db, period)
     else:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"不支持的报表类型: {report_type}")

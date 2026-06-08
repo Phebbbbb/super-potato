@@ -253,6 +253,104 @@ def balance_sheet(db: Session, period: str) -> dict:
     }
 
 
+def cash_flow_statement(db: Session, period: str) -> list[dict]:
+    """现金流量表（简易版 — 基于凭证分录直接法）"""
+    year = int(period[:4])
+    month = int(period[5:7])
+    import calendar
+    last_day = calendar.monthrange(year, month)[1]
+    start_date = f"{year}-{month:02d}-01"
+    end_date = f"{year}-{month:02d}-{last_day}"
+
+    entries = get_confirmed_entries(db, start_date, end_date)
+
+    # 经营活动
+    # 销售商品/提供劳务收到的现金 = 收入类科目贷方 + 销项税额（222101贷方）
+    sales_cash = sum(e["credit"] for e in entries if e["account_code"].startswith("6001") or e["account_code"].startswith("6051"))
+    output_tax_cash = sum(e["credit"] for e in entries if e["account_code"] == "222101")  # 销项税
+    cash_from_sales = round(sales_cash + output_tax_cash, 2)
+
+    # 收到的税费返还
+    tax_refund = sum(e["debit"] for e in entries if e["account_code"].startswith("2221") and e["account_name"] and "返还" in str(e.get("summary", "")))
+
+    # 购买商品/接受劳务支付的现金 = 成本+进项税（借方）+ 存货增加
+    cost_paid = sum(e["debit"] for e in entries if e["account_code"].startswith("6401"))
+    input_tax_paid = sum(e["debit"] for e in entries if e["account_code"] == "222101")  # 进项税
+    inventory_paid = sum(e["debit"] for e in entries if e["account_code"].startswith("140"))
+    cash_for_purchase = round(cost_paid + input_tax_paid + inventory_paid, 2)
+
+    # 支付给职工的现金 = 应付职工薪酬借方发生额
+    payroll_paid = sum(e["debit"] for e in entries if e["account_code"].startswith("2211"))
+
+    # 支付的各项税费
+    tax_paid = sum(e["debit"] for e in entries if any(e["account_code"].startswith(p) for p in ("2221", "6801")))
+
+    # 支付其他与经营活动有关的现金（三费）
+    selling_paid = sum(e["debit"] for e in entries if e["account_code"].startswith("6601"))
+    admin_paid = sum(e["debit"] for e in entries if e["account_code"].startswith("6602"))
+    finance_paid = sum(e["debit"] for e in entries if e["account_code"].startswith("6603"))
+
+    operating_inflow = cash_from_sales + tax_refund
+    operating_outflow = round(cash_for_purchase + payroll_paid + tax_paid + selling_paid + admin_paid + finance_paid, 2)
+    operating_net = round(operating_inflow - operating_outflow, 2)
+
+    # 投资活动
+    # 收回投资/取得投资收益收到的现金
+    invest_inflow = sum(e["credit"] for e in entries if e["account_code"].startswith("61"))
+    # 购建固定资产/无形资产支付的现金
+    fixed_asset_paid = sum(e["debit"] for e in entries if e["account_code"].startswith(("1601", "1701")))
+    invest_outflow = round(fixed_asset_paid, 2)
+    investing_net = round(invest_inflow - invest_outflow, 2)
+
+    # 筹资活动
+    # 吸收投资收到的现金
+    capital_inflow = sum(e["credit"] for e in entries if e["account_code"].startswith("4001"))
+    # 偿还债务/分配股利支付的现金
+    debt_paid = sum(e["debit"] for e in entries if e["account_code"].startswith(("2501", "4002")))
+    financing_net = round(capital_inflow - debt_paid, 2)
+
+    # 现金及现金等价物净增加额
+    net_cash_increase = round(operating_net + investing_net + financing_net, 2)
+
+    # 期初现金（从银行存款 + 库存现金余额）
+    # 简化：取本期贷方合计近似
+    opening_cash = round(sum(e["credit"] for e in entries if e["account_code"] in ("1001", "1002")), 2)
+    ending_cash = round(opening_cash + net_cash_increase, 2)
+
+    return [
+        {"section": "一、经营活动产生的现金流量", "items": [
+            {"item": "销售商品、提供劳务收到的现金", "amount": cash_from_sales},
+            {"item": "收到的税费返还", "amount": tax_refund},
+            {"item": "经营活动现金流入小计", "amount": operating_inflow, "bold": True},
+            {"item": "购买商品、接受劳务支付的现金", "amount": -cash_for_purchase},
+            {"item": "支付给职工以及为职工支付的现金", "amount": -payroll_paid},
+            {"item": "支付的各项税费", "amount": -tax_paid},
+            {"item": "支付其他与经营活动有关的现金", "amount": -(selling_paid + admin_paid + finance_paid)},
+            {"item": "经营活动现金流出小计", "amount": -operating_outflow, "bold": True},
+            {"item": "经营活动产生的现金流量净额", "amount": operating_net, "bold": True, "highlight": True},
+        ]},
+        {"section": "二、投资活动产生的现金流量", "items": [
+            {"item": "收回投资收到的现金", "amount": invest_inflow},
+            {"item": "投资活动现金流入小计", "amount": invest_inflow, "bold": True},
+            {"item": "购建固定资产、无形资产支付的现金", "amount": -invest_outflow},
+            {"item": "投资活动现金流出小计", "amount": -invest_outflow, "bold": True},
+            {"item": "投资活动产生的现金流量净额", "amount": investing_net, "bold": True, "highlight": True},
+        ]},
+        {"section": "三、筹资活动产生的现金流量", "items": [
+            {"item": "吸收投资收到的现金", "amount": capital_inflow},
+            {"item": "筹资活动现金流入小计", "amount": capital_inflow, "bold": True},
+            {"item": "偿还债务支付的现金", "amount": -debt_paid},
+            {"item": "筹资活动现金流出小计", "amount": -debt_paid, "bold": True},
+            {"item": "筹资活动产生的现金流量净额", "amount": financing_net, "bold": True, "highlight": True},
+        ]},
+        {"section": "汇总", "items": [
+            {"item": "现金及现金等价物净增加额", "amount": net_cash_increase, "bold": True, "highlight": True},
+            {"item": "期初现金及现金等价物余额", "amount": opening_cash},
+            {"item": "期末现金及现金等价物余额", "amount": ending_cash, "bold": True},
+        ]},
+    ]
+
+
 def dashboard_data(db: Session) -> dict:
     """首页仪表盘数据"""
     from datetime import date as dt_date

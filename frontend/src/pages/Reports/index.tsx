@@ -21,21 +21,24 @@ export default function Reports() {
   const [incomeStatement, setIncomeStatement] = useState<any>(null)
   const [balanceSheet, setBalanceSheet] = useState<any>(null)
   const [generalLedger, setGeneralLedger] = useState<any[]>([])
+  const [cashFlow, setCashFlow] = useState<any>(null)
   const { message } = App.useApp()
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [tb, inc, bs, gl] = await Promise.all([
+      const [tb, inc, bs, gl, cf] = await Promise.all([
         reportApi.trialBalance(period),
         reportApi.incomeStatement(period),
         reportApi.balanceSheet(period),
         reportApi.generalLedger(period),
+        reportApi.cashFlow(period),
       ])
       setTrialBalance((tb as any)?.items || tb || [])
       setIncomeStatement(inc)
       setBalanceSheet(bs)
       setGeneralLedger((gl as any)?.items || gl || [])
+      setCashFlow(cf)
     } catch { message.error('加载报表失败') }
     setLoading(false)
   }, [period])
@@ -129,6 +132,27 @@ export default function Reports() {
               />
             </Card>
           </div>
+        </Spin>
+      ),
+    },
+    {
+      key: 'cash-flow', label: '现金流量表',
+      children: (
+        <Spin spinning={loading}>
+          {(cashFlow as any)?.sections?.map((section: any, si: number) => (
+            <Card key={si} title={section.section} size="small" style={{ marginBottom: 12 }}>
+              <Table dataSource={section.items} rowKey="item" size="small" pagination={false} locale={{ emptyText: '-' }}
+                columns={[
+                  { title: '项目', dataIndex: 'item' },
+                  { title: '金额', dataIndex: 'amount', width: 160, render: (v: any) => {
+                    if (v == null) return '-'
+                    const cls = (section.items.find((it: any) => it.item === (v != null ? '现金流量净额' : '')) || section.items.find((it: any) => it.item?.includes?.('净额')))
+                    return <span style={{ color: Number(v) < 0 ? '#b91c1c' : Number(v) > 0 ? '#2d6a4f' : '#333', fontWeight: 700 }}>{amountRender(v)}</span>
+                  }},
+                ]}
+              />
+            </Card>
+          ))}
         </Spin>
       ),
     },

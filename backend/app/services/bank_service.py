@@ -63,7 +63,9 @@ def import_statement(db: Session, bank_account_id: str, client_id: str, lines: l
 
 
 def auto_match(db: Session, bank_account_id: str) -> dict:
-    """自动匹配银行流水与记账凭证"""
+    """自动匹配银行流水与记账凭证 — 多维度综合匹配（金额+日期+对方户名+摘要）"""
+    from datetime import timedelta
+
     unmatched = db.query(BankStatementLine).filter(
         BankStatementLine.bank_account_id == bank_account_id,
         BankStatementLine.match_status == "unmatched",
@@ -75,20 +77,77 @@ def auto_match(db: Session, bank_account_id: str) -> dict:
 
     matched = 0
     for line in unmatched:
-        amount = line.debit if line.debit > 0 else line.credit
+        line_amount = line.debit if line.debit > 0 else line.credit
+        best_match = None
+        best_score = 0.0
+
         for v in vouchers:
             entries = json.loads(v.entries) if isinstance(v.entries, str) else v.entries
             for e in entries:
-                if e.get("account_code") in ("1002", "1001"):
-                    entry_amt = e.get("debit", 0) or e.get("credit", 0)
-                    if abs(float(entry_amt) - amount) < 0.02:
-                        line.match_status = "auto_matched"
-                        line.matched_voucher_id = v.id
-                        line.match_confidence = 1.0
-                        matched += 1
-                        break
-            if line.match_status == "auto_matched":
-                break
+                if e.get("account_code") not in ("1002", "1001"):
+                    continue
+                entry_amt = float(e.get("debit", 0) or 0) or float(e.get("credit", 0) or 0)
+                if entry_amt == 0:
+                    continue
+
+                score = 0.0
+
+                # 1. 金额匹配（0-100分，金额越接近分越高）
+                amt_diff_pct = abs(float(entry_amt) - line_amount) / max(line_amount, 1)
+                if amt_diff_pct < 0.01:  # ±1%以内
+                    score += 100 - amt_diff_pct * 10
+                elif amt_diff_pct < 0.05:  # ±5%以内
+                    score += 50 - amt_diff_pct * 10
+                else:
+                    continue
+
+                # 2. 日期匹配（0-20分，日期越近分越高）
+                try:
+                    line_date = line.transaction_date
+                    if isinstance(line_date, str):
+                        from datetime import date as dt_date
+                        line_date = dt_date.fromisoformat(line_date)
+                    if hasattr(v, 'voucher_date') and v.voucher_date:
+                        days_diff = abs((line_date - v.voucher_date).days)
+                        if days_diff <= 1:
+                            score += 20
+                        elif days_diff <= 3:
+                            score += 15
+                        elif days_diff <= 7:
+                            score += 5
+                except Exception:
+                    pass
+
+                # 3. 对方户名匹配（0-15分）
+                counterparty = (line.counterparty or "").strip()
+                if counterparty and len(counterparty) >= 2:
+                    entry_summary = str(e.get("summary", ""))
+                    voucher_summary = str(getattr(v, 'summary', '') or '')
+                    combined = entry_summary + voucher_summary
+                    if counterparty in combined:
+                        score += 15
+                    elif any(c in combined for c in counterparty[:2]):
+                        score += 5
+
+                # 4. 摘要关键词匹配（0-10分）
+                line_desc = (line.description or "").lower()
+                entry_summary = str(e.get("summary", "")).lower()
+                voucher_summary = str(getattr(v, 'summary', '') or '').lower()
+                combined_text = entry_summary + " " + voucher_summary
+                common_keywords = ["货款", "服务费", "工资", "租金", "水电", "税金", "社保", "报销"]
+                keyword_hits = sum(1 for kw in common_keywords if kw in line_desc and kw in combined_text)
+                score += min(keyword_hits * 5, 10)
+
+                if score > best_score:
+                    best_score = score
+                    best_match = (v.id, entry_amt)
+
+        # 阈值：总分 >= 70 才自动匹配
+        if best_match and best_score >= 70:
+            line.match_status = "auto_matched"
+            line.matched_voucher_id = best_match[0]
+            line.match_confidence = round(min(best_score / 100, 1.0), 2)
+            matched += 1
 
     db.commit()
     return {"matched_count": matched, "total": len(unmatched)}

@@ -134,6 +134,7 @@ export const reportApi = {
   trialBalance: (period: string) => api.get('/reports/trial-balance', { params: { period } }),
   incomeStatement: (period: string) => api.get('/reports/income-statement', { params: { period } }),
   balanceSheet: (period: string) => api.get('/reports/balance-sheet', { params: { period } }),
+  cashFlow: (period: string) => api.get('/reports/cash-flow', { params: { period } }),
   export: (reportType: string, period: string) => api.get('/reports/export', { params: { report_type: reportType, period } }),
 }
 

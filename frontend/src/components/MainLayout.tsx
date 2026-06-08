@@ -64,7 +64,7 @@ const menuItems = [
     children: [
       { key: '/tax-risk', icon: <SafetyOutlined />, label: '税务风险自查' },
       { key: '/audit', icon: <AuditOutlined />, label: '内审中心' },
-      { key: '/ai-agent', icon: <CustomerServiceOutlined />, label: '政策法规查询' },
+      { key: '/ai-agent', icon: <CustomerServiceOutlined />, label: 'AI 税务顾问' },
     ],
   },
   { type: 'divider' as const },
