@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Card, Table, Button, Space, Tag, Modal, Form, Input, Select, InputNumber, App, Typography, Result, Row, Col, Divider } from 'antd'
-import { PlusOutlined, SendOutlined, EyeOutlined, DeleteOutlined, CheckCircleOutlined, RocketOutlined, InboxOutlined } from '@ant-design/icons'
-import { invoiceApi } from '@/services/api'
+import { Card, Table, Button, Space, Tag, Modal, Form, Input, Select, InputNumber, App, Typography, Result, Row, Col, Divider, Spin, Descriptions } from 'antd'
+import { PlusOutlined, SendOutlined, EyeOutlined, DeleteOutlined, CheckCircleOutlined, RocketOutlined, InboxOutlined, ThunderboltOutlined, RobotOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
+import { invoiceApi, rpaApi, verifyApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
 import SkeletonTable from '@/components/SkeletonTable'
 import EmptyState from '@/components/EmptyState'
@@ -17,6 +17,11 @@ export default function Invoicing() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [issuingId, setIssuingId] = useState<string | null>(null)
   const [issueResult, setIssueResult] = useState<any>(null)
+  const [autoCreating, setAutoCreating] = useState(false)
+  const [verifyingId, setVerifyingId] = useState<string | null>(null)
+  const [verifyResult, setVerifyResult] = useState<any>(null)
+  const [verifyModalOpen, setVerifyModalOpen] = useState(false)
+  const [autoIssuing, setAutoIssuing] = useState(false)
   const [selected, setSelected] = useState<any>(null)
   const [form] = Form.useForm()
   const { currentClientId } = useClient()
@@ -63,6 +68,67 @@ export default function Invoicing() {
     setIssuingId(null)
   }
 
+  const handleAutoCreate = async () => {
+    if (!currentClientId) { message.warning('请先选择客户'); return }
+    setAutoCreating(true)
+    try {
+      const res: any = await rpaApi.autoCreateInvoices(currentClientId)
+      if (res.invoices_created > 0) {
+        message.success(`已从凭证自动生成 ${res.invoices_created} 张开票草稿`)
+      } else {
+        message.info(res.details?.[0] || '未发现需要开票的销项凭证')
+      }
+      fetchInvoices()
+    } catch (e: any) {
+      message.error(e?.detail || '自动创建发票失败')
+    }
+    setAutoCreating(false)
+  }
+
+  const handleAutoIssueAll = async () => {
+    if (!currentClientId) { message.warning('请先选择客户'); return }
+    const draftCount = invoices.filter(i => i.status === 'draft').length
+    if (draftCount === 0) { message.info('没有待开具的发票草稿'); return }
+    Modal.confirm({
+      title: '一键批量开票',
+      content: `将自动提交 ${draftCount} 张发票至电子税务局，预计需要 ${draftCount * 15} 秒`,
+      onOk: async () => {
+        setAutoIssuing(true)
+        try {
+          const res: any = await rpaApi.autoIssueAllInvoices(currentClientId)
+          if (res.failed_count > 0) {
+            message.warning(res.message)
+          } else {
+            message.success(res.message)
+          }
+          fetchInvoices()
+        } catch (e: any) {
+          message.error(e?.detail || '批量开票失败')
+        }
+        setAutoIssuing(false)
+      },
+    })
+  }
+
+  const handleVerify = async (record: any) => {
+    setVerifyingId(record.id)
+    setVerifyResult(null)
+    setVerifyModalOpen(true)
+    try {
+      const res: any = await verifyApi.verifySystemInvoice(record.id)
+      setVerifyResult(res)
+      if (res.is_valid) {
+        message.success('发票查验通过 — 该发票为真')
+      } else {
+        message.warning(res.message || '查验结果异常')
+      }
+    } catch (e: any) {
+      setVerifyResult({ success: false, message: e?.detail || '查验请求失败' })
+      message.error('查验失败')
+    }
+    setVerifyingId(null)
+  }
+
   const columns: ColumnsType<any> = [
     { title: '购方名称', dataIndex: 'buyer_name', key: 'buyer_name', width: 200, ellipsis: true },
     { title: '纳税人识别号', dataIndex: 'buyer_tax_no', key: 'buyer_tax_no', width: 180 },
@@ -102,6 +168,12 @@ export default function Invoicing() {
           {record.status === 'failed' && (
             <Button type="link" size="small" icon={<SendOutlined />} onClick={() => handleIssue(record)}>重试</Button>
           )}
+          {record.status === 'issued' && record.invoice_code && (
+            <Button type="link" size="small" icon={<SafetyCertificateOutlined />} loading={verifyingId === record.id}
+              onClick={() => handleVerify(record)} style={{ color: '#16a34a' }}>
+              查验
+            </Button>
+          )}
           {record.status !== 'issued' && (
             <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={async () => {
               try { await invoiceApi.delete(record.id); message.success('已删除'); fetchInvoices() }
@@ -122,9 +194,20 @@ export default function Invoicing() {
             数电票（全电发票）开具 · 基于 <Text code>Playwright</Text> 自动登录电子税务局
           </Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setCreateOpen(true) }}>
-          新增开票
-        </Button>
+        <Space>
+          <Button icon={<RobotOutlined />} loading={autoCreating} onClick={handleAutoCreate}
+            style={{ color: '#7c3aed', borderColor: '#7c3aed' }}>
+            自动识别开票
+          </Button>
+          <Button icon={<ThunderboltOutlined />} loading={autoIssuing} onClick={handleAutoIssueAll}
+            style={{ color: '#dc2626', borderColor: '#dc2626' }}
+            disabled={invoices.filter(i => i.status === 'draft').length === 0}>
+            一键全部开具 ({invoices.filter(i => i.status === 'draft').length})
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setCreateOpen(true) }}>
+            手动新增开票
+          </Button>
+        </Space>
       </div>
 
       {/* 开票结果提示 */}
@@ -293,6 +376,40 @@ export default function Invoicing() {
             />
           </>
         )}
+      </Modal>
+
+      {/* 发票查验结果弹窗 */}
+      <Modal title="发票真伪查验" open={verifyModalOpen} onCancel={() => setVerifyModalOpen(false)}
+        footer={<Button onClick={() => setVerifyModalOpen(false)}>关闭</Button>} width={600}>
+        {verifyingId ? (
+          <div style={{ textAlign: 'center', padding: 40 }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 16 }}>正在连接国家税务总局发票查验平台…</div>
+          </div>
+        ) : verifyResult ? (
+          verifyResult.success ? (
+            <div>
+              <Result
+                status={verifyResult.is_valid ? 'success' : 'warning'}
+                title={verifyResult.is_valid ? '发票查验通过 — 该发票为真' : (verifyResult.message || '查验结果异常')}
+                subTitle={`发票代码: ${verifyResult.invoice_code} / 发票号码: ${verifyResult.invoice_no}`}
+              />
+              {verifyResult.details && (
+                <Descriptions bordered size="small" column={2} style={{ marginTop: 16 }}>
+                  <Descriptions.Item label="发票类型">{verifyResult.details.invoice_type || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="开票日期">{verifyResult.details.invoice_date || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="销售方">{verifyResult.details.seller_name || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="购买方">{verifyResult.details.buyer_name || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="金额(不含税)">{verifyResult.details.total_amount || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="税额">{verifyResult.details.tax_amount || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="价税合计" span={2}>{verifyResult.details.grand_total || '-'}</Descriptions.Item>
+                </Descriptions>
+              )}
+            </div>
+          ) : (
+            <Result status="error" title="查验失败" subTitle={verifyResult.message} />
+          )
+        ) : null}
       </Modal>
     </div>
   )

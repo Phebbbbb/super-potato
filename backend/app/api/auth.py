@@ -8,6 +8,7 @@ from app.services.auth import (
     verify_password, create_access_token, get_current_user,
     MAX_FAILED_ATTEMPTS, LOCKOUT_MINUTES,
 )
+from app.services.version_control import commit
 from app.schemas.core import LoginRequest
 
 router = APIRouter()
@@ -44,6 +45,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     client_ids = [a.client_id for a in assignments]
 
     token = create_access_token(user)
+    commit(db, "user", user.id, "login", user.display_name or user.username,
+           after={"username": user.username, "role": user.role})
     db.commit()
 
     return {

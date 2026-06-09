@@ -1,4 +1,4 @@
-"""反馈与修正接口 — 每个环节均可人工介入修改"""
+"""反馈与修正接口 — 每个环节均可人工介入修改 + 自学习纠错引擎"""
 import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from app.models.filing import TaxFiling
 from app.services.voucher_service import validate_balance
 from app.services.audit_service import log_action, get_audit_trail
 from app.services.qr_service import create_trace
+from app.services.self_learning import record_correction, get_learning_stats
 from app.services.auth import get_current_user, require_modify
 
 router = APIRouter()
@@ -38,6 +39,24 @@ def correct_document_ocr(doc_id: str, data: dict, db: Session = Depends(get_db),
         "old": doc.ocr_structured,
         "new": new_data,
     })
+
+    # === 自学习引擎: 记录每条 OCR 字段修正 ===
+    context = {
+        "file_name": doc.file_name or "",
+        "doc_type": doc.doc_type or "",
+    }
+    try:
+        ocr_raw = json.loads(doc.ocr_result) if doc.ocr_result else {}
+    except Exception:
+        ocr_raw = {}
+    for vendor_key in ["seller_name", "buyer_name", "vendor_name", "supplier_name"]:
+        if ocr_raw.get(vendor_key):
+            context["vendor_name"] = ocr_raw[vendor_key]
+            break
+    for field, corrected_val in new_data.items():
+        orig_val = ocr_raw.get(field, "")
+        if orig_val != corrected_val:
+            record_correction(db, "ocr", doc_id, field, str(orig_val), str(corrected_val), context)
 
     db.commit()
     return {
@@ -90,6 +109,16 @@ def correct_voucher_entries(voucher_id: str, data: dict, db: Session = Depends(g
         "entries_before": old_entries,
         "entries_after": entries,
     })
+
+    # === 自学习引擎: 记录每条分录修正 ===
+    context = {"summary": v.summary or ""}
+    for i, new_entry in enumerate(entries):
+        old_entry = old_entries[i] if i < len(old_entries) else {}
+        for key in ["account_code", "account_name", "debit", "credit", "summary"]:
+            old_val = str(old_entry.get(key, ""))
+            new_val = str(new_entry.get(key, ""))
+            if old_val and new_val and old_val != new_val:
+                record_correction(db, "voucher_entries", voucher_id, f"entries[{i}].{key}", old_val, new_val, context)
 
     db.commit()
     return {
@@ -179,3 +208,29 @@ def audit_trail(target_type: str, target_id: str, db: Session = Depends(get_db))
         "total": len(trail),
         "trail": trail,
     }
+
+
+# ========================
+# 自学习引擎统计
+# ========================
+
+@router.get("/self-learning/stats")
+def self_learning_stats(db: Session = Depends(get_db)):
+    """获取自学习引擎统计数据"""
+    return get_learning_stats(db)
+
+
+@router.post("/self-learning/preview")
+def preview_auto_correct(data: dict, db: Session = Depends(get_db)):
+    """
+    预览自动纠错效果（不实际修改数据）
+    传入: {"target_type": "ocr", "field_path": "invoice_amount", "value": "123.45", "context": {...}}
+    """
+    from app.services.self_learning import auto_correct
+    return auto_correct(
+        db,
+        data.get("target_type", "ocr"),
+        data.get("field_path", ""),
+        str(data.get("value", "")),
+        data.get("context", {}),
+    )

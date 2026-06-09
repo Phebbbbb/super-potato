@@ -3,7 +3,7 @@ import os
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from app.services.playwright_helpers import safe_fill, safe_click, detect_captcha, retry_with_backoff, NeedHumanReview
+from app.services.playwright_helpers import safe_fill, safe_click, detect_captcha, retry_with_backoff, NeedHumanReview, safe_goto, detect_anti_bot, save_debug_snapshot
 from app.services.error_handler import log_error, log_info
 
 SCREENSHOT_DIR = Path("screenshots/invoices")
@@ -320,7 +320,7 @@ async def issue_invoice_playwright(
         try:
             # === Step 1: 登录 ===
             log_info("tax_invoice", "step1_login", f"invoice={rid} province={province}")
-            await page.goto(bureau["login_url"], timeout=config["timeout"], wait_until="domcontentloaded")
+            await safe_goto(page, bureau["login_url"], timeout=config["timeout"])
             await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_01_login.png"))
             await asyncio.sleep(3)
 
@@ -342,9 +342,15 @@ async def issue_invoice_playwright(
                 result["screenshot"] = cap_path
                 return result
 
+            # 检测反爬/风控
+            risk = await detect_anti_bot(page)
+            if risk:
+                result["message"] = f"检测到风控限制 ({risk})，请稍后再试或切换网络"
+                return result
+
             # === Step 2: 导航到开票页 ===
             log_info("tax_invoice", "step2_navigate", f"invoice={rid}")
-            await page.goto(bureau["invoice_url"], timeout=config["timeout"], wait_until="domcontentloaded")
+            await safe_goto(page, bureau["invoice_url"], timeout=config["timeout"])
             await asyncio.sleep(4)
             await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_02_page.png"))
 
@@ -427,7 +433,7 @@ async def issue_invoice_playwright(
             log_error("tax_invoice", e, {"invoice_id": rid, "province": province})
             result["message"] = f"开票流程异常: {str(e)[:200]}"
             try:
-                await page.screenshot(path=str(SCREENSHOT_DIR / f"error_{rid}.png"), full_page=True)
+                result["screenshot"] = await save_debug_snapshot(page, f"error_invoice_{rid}")
             except Exception:
                 pass
             return result

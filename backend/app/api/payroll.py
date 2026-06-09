@@ -49,8 +49,11 @@ def create_employee(data: EmployeeCreate, db: Session = Depends(get_db), user: U
 def update_employee(emp_id: str, data: dict, db: Session = Depends(get_db), _=Depends(require_modify)):
     emp = db.query(Employee).filter(Employee.id == emp_id).first()
     if not emp: raise HTTPException(404, "员工不存在")
+    before = {"name": emp.name, "position": emp.position, "base_salary": emp.base_salary, "status": emp.status}
     for f in ["name","position","department","base_salary","social_insurance_base","housing_fund_base","phone","id_card","bank_account","bank_name","status"]:
         if f in data: setattr(emp, f, data[f])
+    commit(db, "employee", emp_id, "updated", "",
+           before=before, after={"name": emp.name, "position": emp.position, "base_salary": emp.base_salary, "status": emp.status})
     db.commit(); return {"message": "员工信息已更新"}
 
 
@@ -115,6 +118,7 @@ def confirm_batch(batch_id: str, data: dict, db: Session = Depends(get_db), _=De
 def update_detail(batch_id: str, detail_id: str, data: dict, db: Session = Depends(get_db), _=Depends(require_modify)):
     d = db.query(PayrollDetail).filter(PayrollDetail.id == detail_id, PayrollDetail.batch_id == batch_id).first()
     if not d: raise HTTPException(404, "明细不存在")
+    before = {"gross_pay": d.gross_pay, "iit": d.iit, "net_pay": d.net_pay}
     for f in ["overtime_pay","bonus","allowance","deduction","remark"]:
         if f in data: setattr(d, f, data[f])
     d.gross_pay = d.base_salary + d.overtime_pay + d.bonus + d.allowance - d.deduction
@@ -122,5 +126,7 @@ def update_detail(batch_id: str, detail_id: str, data: dict, db: Session = Depen
     from app.services.payroll_service import calc_iit
     d.iit = calc_iit(d.taxable_income)
     d.net_pay = d.gross_pay - d.social_insurance_personal - d.housing_fund_personal - d.iit
+    commit(db, "payroll_detail", detail_id, "updated", "",
+           before=before, after={"gross_pay": d.gross_pay, "iit": d.iit, "net_pay": d.net_pay})
     db.commit()
     return {"message": "已更新"}

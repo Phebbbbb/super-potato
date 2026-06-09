@@ -103,15 +103,15 @@ export default function Login() {
             </Form>
 
             <div style={{ textAlign: 'center', paddingTop: 12, borderTop: '1px dashed #e2e8f0' }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                演示账号 <Text code style={{ fontSize: 12 }}>admin</Text> / <Text code style={{ fontSize: 12 }}>admin123</Text>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                请联系系统管理员获取账号
               </Text>
             </div>
           </Card>
 
           <div style={{ textAlign: 'center', marginTop: 20 }}>
             <Text style={{ color: '#cbd5e1', fontSize: 11 }}>
-              版本 V2.0 &nbsp;|&nbsp; 备案号：京ICP备2026XXXXXX号
+              版本 V2.1 &nbsp;|&nbsp; 智能财税 · 全自动税务机器人
             </Text>
           </div>
         </div>

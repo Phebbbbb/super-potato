@@ -17,6 +17,8 @@ from app.services.tax_service import preview_filing
 from app.services.tax_automation import TaxAutomationEngine
 from app.services.auth import require_modify, get_current_user
 from app.models.user import User
+from app.models.invoice import Invoice
+from app.models.client import Client
 from app.services.error_handler import log_info, log_error
 from app.services.version_control import commit
 
@@ -120,6 +122,130 @@ async def test_webhook(data: dict):
         "response": result["body"][:500],
         "success": result["status_code"] == 200,
     }
+
+
+def _auto_create_invoices(client_id: str, db: Session, operator: str) -> dict:
+    """
+    从已确认凭证中自动识别需要开票的销项交易，提取购方信息和商品明细，生成开票草稿。
+    识别逻辑：扫描已确认凭证中 6001（主营业务收入）贷方分录 → 追溯到原始票据获取购方信息
+    """
+    result = {"invoices_created": 0, "skipped": 0, "details": []}
+
+    # 找到所有已确认且包含收入分录的凭证
+    confirmed_vouchers = (
+        db.query(AccountingVoucher)
+        .filter(
+            AccountingVoucher.client_id == client_id,
+            AccountingVoucher.status == "confirmed",
+        )
+        .all()
+    )
+
+    # 收集所有涉及收入分录的凭证及其来源票据
+    revenue_vouchers = []
+    for v in confirmed_vouchers:
+        entries = json.loads(v.entries) if v.entries else []
+        has_revenue = any(
+            e.get("credit", 0) > 0 and str(e.get("account_code", "")).startswith("6001")
+            for e in entries
+        )
+        if has_revenue:
+            revenue_vouchers.append(v)
+
+    if not revenue_vouchers:
+        result["details"].append("没有发现需要开票的销项凭证")
+        return result
+
+    # 按购方分组（从源票据 OCR 数据提取）
+    for v in revenue_vouchers:
+        entries = json.loads(v.entries) if v.entries else []
+        source_ids = json.loads(v.source_doc_ids) if v.source_doc_ids else []
+
+        # 提取收入行 → 发票项目
+        invoice_items = []
+        for e in entries:
+            if e.get("credit", 0) > 0 and str(e.get("account_code", "")).startswith("6001"):
+                amount = float(e.get("credit", 0))
+                tax_rate = 0.13 if e.get("tax_rate") is None else float(e.get("tax_rate", 0.13))
+                tax_amount = round(amount * tax_rate, 2)
+                invoice_items.append({
+                    "name": e.get("summary", "服务费") or e.get("account_name", "服务费"),
+                    "spec": "",
+                    "unit": "项",
+                    "quantity": 1,
+                    "price": str(amount),
+                    "amount": str(amount),
+                    "tax_rate": tax_rate,
+                    "tax_amount": str(tax_amount),
+                })
+
+        if not invoice_items:
+            continue
+
+        # 从源票据 OCR 提取购方信息
+        buyer_name = ""
+        buyer_tax_no = ""
+        for doc_id in source_ids:
+            doc = db.query(OriginalDocument).filter(OriginalDocument.id == doc_id).first()
+            if not doc or not doc.ocr_structured:
+                continue
+            ocr = json.loads(doc.ocr_structured) if doc.ocr_structured else {}
+            if ocr.get("buyer_name"):
+                buyer_name = ocr["buyer_name"]
+            if ocr.get("buyer_tax_no"):
+                buyer_tax_no = ocr.get("buyer_tax_no", "")
+            if buyer_name and buyer_tax_no:
+                break
+
+        # OCR 没提取到购方 → 用客户自己的信息作为卖方（反向：销售给未知购方时使用摘要中的客户名）
+        if not buyer_name:
+            client = db.query(Client).filter(Client.id == client_id).first()
+            if client:
+                buyer_name = client.name
+                buyer_tax_no = client.tax_no
+            if not buyer_name:
+                result["skipped"] += 1
+                result["details"].append(f"⚠️ {v.voucher_no}: 无法识别购方信息，跳过")
+                continue
+
+        total_amount = sum(float(it["amount"]) for it in invoice_items)
+        total_tax = sum(float(it["tax_amount"]) for it in invoice_items)
+
+        # 幂等：同一凭证不重复生成
+        existing = db.query(Invoice).filter(
+            Invoice.client_id == client_id,
+            Invoice.remark == f"auto:{v.id}",
+        ).first()
+        if existing:
+            result["skipped"] += 1
+            result["details"].append(f"⏭️ {v.voucher_no}: 已存在开票记录 {existing.id[:8]}")
+            continue
+
+        invoice = Invoice(
+            id=str(uuid.uuid4()),
+            client_id=client_id,
+            buyer_name=buyer_name,
+            buyer_tax_no=buyer_tax_no,
+            invoice_type="electronic_normal",
+            items=json.dumps(invoice_items, ensure_ascii=False),
+            total_amount=str(round(total_amount, 2)),
+            total_tax=str(round(total_tax, 2)),
+            grand_total=str(round(total_amount + total_tax, 2)),
+            remark=f"auto:{v.id}",
+            status="draft",
+            created_by=operator,
+        )
+        db.add(invoice)
+        db.flush()
+        create_trace(db, "invoice", invoice.id, "auto_created")
+        commit(db, "invoice", invoice.id, "auto_created", operator,
+               after={"buyer_name": buyer_name, "total_amount": invoice.total_amount, "source_voucher": v.voucher_no})
+
+        result["invoices_created"] += 1
+        result["details"].append(f"🧾 {v.voucher_no} → 开票 {invoice.id[:8]}: {buyer_name} ¥{invoice.grand_total}")
+
+    db.commit()
+    return result
 
 
 @router.post("/auto-process")
@@ -244,23 +370,50 @@ def auto_process_chain(
             result["details"].append(f"✅ {doc_date}: {vno} 已自动确认 ({', '.join(doc_ids_for_detail)})")
             voucher_dates_used.add(doc_date[:7])
 
-        # Step 3: 为涉及的申报期自动创建申报任务
+        # Step 3: 识别客户应申报的全税种 → 自动创建所有申报任务
         from app.models.filing import TaxFiling
+        from app.models.client import Client
+        client = db.query(Client).filter(Client.id == client_id).first()
+        taxpayer_type = client.taxpayer_type if client else "small"
+
+        # 全税种覆盖（对标亿企赢）：增值税 + 附加税 + 企业所得税 + 印花税 (每期)
+        # 房产税 + 土地使用税 仅在 4月/10月（半年申报期）自动创建
+        monthly_taxes = ["vat", "surtax", "corporate_income", "stamp_duty"]
+        today = dt_date.today()
+        if today.month in (4, 10):
+            monthly_taxes.extend(["property_tax", "land_use_tax"])
+        # 一般纳税人增值税月报，小规模季报
+        if taxpayer_type == "small" and today.month not in (1, 4, 7, 10):
+            monthly_taxes = [t for t in monthly_taxes if t != "vat"]
+            # 附加税跟随增值税
+            monthly_taxes = [t for t in monthly_taxes if t != "surtax"]
+        # 企业所得税季报月份
+        if today.month not in (1, 4, 7, 10):
+            monthly_taxes = [t for t in monthly_taxes if t != "corporate_income"]
+
+        tax_name_map = {
+            "vat": "增值税", "surtax": "附加税", "corporate_income": "企业所得税",
+            "stamp_duty": "印花税", "property_tax": "房产税", "land_use_tax": "城镇土地使用税",
+        }
+
         for period in sorted(voucher_dates_used):
-            existing_filing = db.query(TaxFiling).filter(
-                TaxFiling.client_id == client_id,
-                TaxFiling.period == period,
-            ).first()
-            if not existing_filing:
+            for tax_type in monthly_taxes:
+                existing = db.query(TaxFiling).filter(
+                    TaxFiling.client_id == client_id,
+                    TaxFiling.period == period,
+                    TaxFiling.tax_type == tax_type,
+                ).first()
+                if existing:
+                    continue
                 filing = TaxFiling(
                     id=str(uuid.uuid4()),
-                    tax_type="vat",
+                    tax_type=tax_type,
                     period=period,
                     status="pending",
                     client_id=client_id,
                 )
                 try:
-                    tax_data = preview_filing(db, "vat", period, "small")
+                    tax_data = preview_filing(db, tax_type, period, taxpayer_type)
                     filing.filing_result = json.dumps(tax_data, ensure_ascii=False)
                 except Exception:
                     pass
@@ -268,9 +421,15 @@ def auto_process_chain(
                 db.flush()
                 create_trace(db, "tax_filing", filing.id, "file_tax")
                 commit(db, "tax_filing", filing.id, "auto_created", operator,
-                       after={"tax_type": "vat", "period": period, "client_id": client_id})
+                       after={"tax_type": tax_type, "period": period, "client_id": client_id})
                 result["filings_created"] += 1
-                result["details"].append(f"📋 {period}: 增值税申报任务已自动创建")
+                result["details"].append(f"📋 {period} {tax_name_map.get(tax_type, tax_type)}: 申报任务已自动创建")
+
+        # Step 4: 自动识别需要开票的销项凭证 → 生成开票草稿
+        invoice_result = _auto_create_invoices(client_id, db, operator)
+        result["invoices_created"] = invoice_result["invoices_created"]
+        result["invoices_skipped"] = invoice_result["skipped"]
+        result["details"].extend(invoice_result["details"])
 
         db.commit()
 
@@ -281,11 +440,15 @@ def auto_process_chain(
 
     total = result["vouchers_generated"]
     has_filings = result['filings_created'] > 0
-    result["summary"] = (
-        f"处理完成：{result['documents_found']} 张票据 -> "
-        f"{total} 张凭证（全部自动确认）"
-        + (f"，{result['filings_created']} 项申报已创建" + ("，可一键提交" if has_filings else "") if has_filings else "")
-    )
+    has_invoices = result.get('invoices_created', 0) > 0
+    parts = [
+        f"处理完成：{result['documents_found']} 张票据 -> {total} 张凭证（全部自动确认）"
+    ]
+    if has_filings:
+        parts.append(f"{result['filings_created']} 项申报已创建")
+    if has_invoices:
+        parts.append(f"{result['invoices_created']} 张开票草稿已生成")
+    result["summary"] = "，".join(parts)
 
     return result
 
@@ -391,4 +554,100 @@ async def auto_submit_filings(
         "failed_count": len(results) - success_count,
         "results": results,
         "message": f"申报提交完成：{success_count}/{len(results)} 成功",
+    }
+
+
+@router.post("/auto-create-invoices")
+def auto_create_invoices_endpoint(
+    client_id: str = Query(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _=Depends(require_modify),
+):
+    """
+    从已确认凭证自动识别销项交易并生成开票草稿
+    扫描所有已确认凭证中 6001（主营业务收入）贷方分录 → 追溯源票据获取购方信息 → 生成 Invoice 草稿
+    """
+    operator = user.display_name or "ai"
+    result = _auto_create_invoices(client_id, db, operator)
+    return result
+
+
+@router.post("/auto-issue-all-invoices")
+async def auto_issue_all_invoices(
+    client_id: str = Query(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _=Depends(require_modify),
+):
+    """
+    一键自动开具当前客户所有 draft 状态的发票（通过 Playwright 提交到电子税务局）
+    """
+    pending_invoices = db.query(Invoice).filter(
+        Invoice.client_id == client_id,
+        Invoice.status == "draft",
+    ).all()
+
+    if not pending_invoices:
+        return {"success": True, "message": "没有待开具的发票", "results": []}
+
+    from app.api.settings import get_tax_credentials
+    tax_credentials = get_tax_credentials(db)
+
+    results = []
+    for inv in pending_invoices:
+        inv.status = "issuing"
+        db.commit()
+
+        items = json.loads(inv.items) if inv.items else []
+        try:
+            from app.services.tax_invoice import issue_invoice_playwright
+            issue_result = await issue_invoice_playwright(
+                invoice_id=inv.id,
+                buyer_name=inv.buyer_name,
+                buyer_tax_no=inv.buyer_tax_no,
+                invoice_type=inv.invoice_type,
+                items=items,
+                remark=inv.remark or "",
+                tax_credentials=tax_credentials,
+            )
+
+            if issue_result["success"]:
+                inv.status = "issued"
+                inv.issued_at = __import__("datetime").datetime.now(__import__("datetime").UTC)
+                inv.invoice_code = issue_result.get("invoice_code", "")
+                inv.invoice_no = issue_result.get("invoice_no", "")
+                inv.invoice_url = issue_result.get("invoice_url", "")
+                inv.screenshot_path = issue_result.get("screenshot", "")
+                create_trace(db, "invoice", inv.id, "auto_issued")
+            else:
+                inv.status = "failed"
+
+            db.commit()
+            results.append({
+                "invoice_id": inv.id,
+                "buyer_name": inv.buyer_name,
+                "amount": inv.grand_total,
+                "success": issue_result["success"],
+                "message": issue_result.get("message", ""),
+            })
+
+        except Exception as e:
+            inv.status = "failed"
+            db.commit()
+            results.append({
+                "invoice_id": inv.id,
+                "buyer_name": inv.buyer_name,
+                "success": False,
+                "message": f"开具异常: {str(e)[:150]}",
+            })
+
+    success_count = sum(1 for r in results if r["success"])
+    return {
+        "success": True,
+        "total": len(results),
+        "success_count": success_count,
+        "failed_count": len(results) - success_count,
+        "results": results,
+        "message": f"开票完成：{success_count}/{len(results)} 成功",
     }

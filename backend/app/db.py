@@ -39,5 +39,10 @@ def init_db():
     from app.models.field_task import FieldTask
     from app.models.invoice import Invoice
     from app.models.tax_announcement import TaxAnnouncement
+    from app.models.notification import Notification
+    from app.models.fixed_asset import FixedAsset
+    from app.models.contract import Contract
+    from app.models.annual_report import AnnualReport
+    from app.models.correction_learning import CorrectionRecord, LearnedPattern
 
     Base.metadata.create_all(bind=engine)

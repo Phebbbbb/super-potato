@@ -98,6 +98,16 @@ export const taxAutoApi = {
   profiles: () => api.get('/tax-automation/profiles'),
 }
 
+// ===== RPA 全自动加工链 =====
+export const rpaApi = {
+  autoProcess: (clientId: string) => api.post(`/rpa/auto-process?client_id=${clientId}`),
+  autoSubmitFilings: (clientId: string) => api.post(`/rpa/auto-submit-filings?client_id=${clientId}`),
+  autoCreateInvoices: (clientId: string) => api.post(`/rpa/auto-create-invoices?client_id=${clientId}`),
+  autoIssueAllInvoices: (clientId: string) => api.post(`/rpa/auto-issue-all-invoices?client_id=${clientId}`),
+  periodClose: (clientId: string, period?: string) =>
+    api.post(`/rpa/period-close?client_id=${clientId}${period ? `&period=${period}` : ''}`),
+}
+
 // ===== 人工反馈修正（各环节审核通道）=====
 export const feedbackApi = {
   correctDocOCR: (docId: string, data: any) => api.patch(`/feedback/document/${docId}/ocr`, data),
@@ -125,6 +135,7 @@ export const qrApi = {
 // ===== 财务报表 =====
 export const reportApi = {
   dashboard: () => api.get('/reports/dashboard'),
+  automationRate: () => api.get('/reports/automation-rate'),
   generalLedger: (period: string) => {
     const [y, m] = period.split('-')
     const start = `${y}-${m}-01`
@@ -223,10 +234,68 @@ export const announcementApi = {
   refresh: () => api.post('/announcements/refresh'),
 }
 
+// ===== 消息通知 =====
+export const notificationApi = {
+  list: (params?: any) => api.get('/notifications/', { params }),
+  count: () => api.get('/notifications/count'),
+  markRead: (id: string) => api.patch(`/notifications/${id}/read`),
+  markAllRead: () => api.patch('/notifications/read-all'),
+}
+
+// ===== 固定资产 =====
+export const fixedAssetApi = {
+  list: (params?: any) => api.get('/fixed-assets/', { params }),
+  create: (data: any) => api.post('/fixed-assets/', data),
+  update: (id: string, data: any) => api.patch(`/fixed-assets/${id}`, data),
+  delete: (id: string) => api.delete(`/fixed-assets/${id}`),
+  runDepreciation: (clientId: string, period?: string) => api.post(`/fixed-assets/run-depreciation?client_id=${clientId}${period ? `&period=${period}` : ''}`),
+}
+
+// ===== 合同管理 =====
+export const contractApi = {
+  list: (params?: any) => api.get('/contracts/', { params }),
+  create: (data: any) => api.post('/contracts/', data),
+  update: (id: string, data: any) => api.patch(`/contracts/${id}`, data),
+  delete: (id: string) => api.delete(`/contracts/${id}`),
+}
+
 // ===== 系统运维 =====
 export const systemApi = {
   backup: () => api.post('/system/backup'),
   restore: (backupFile: string) => api.post(`/system/restore?backup_file=${backupFile}`),
+}
+
+// ===== 发票真伪查验 =====
+export const verifyApi = {
+  verify: (data: any) => api.post('/invoice-verify/verify', data),
+  verifyBatch: (data: any) => api.post('/invoice-verify/verify/batch', data),
+  verifySystemInvoice: (invoiceId: string) => api.post(`/invoice-verify/verify/${invoiceId}`),
+}
+
+// ===== 批量自动化 =====
+export const batchApi = {
+  batchFiling: (data: any) => api.post('/batch/batch-filing', data),
+  batchInvoice: (data: any) => api.post('/batch/batch-invoice', data),
+  batchAllClients: (operation: string, profile?: string) =>
+    api.post(`/batch/batch-all-clients?operation=${operation}&profile=${profile || 'generic'}`),
+  getJobStatus: (jobId: string) => api.get(`/batch/job/${jobId}`),
+  poolStats: () => api.get('/batch/pool-stats'),
+}
+
+// ===== 预检 + 税务优化 =====
+export const precheckApi = {
+  check: (clientId: string, period?: string) => api.get(`/precheck/${clientId}${period ? `?period=${period}` : ''}`),
+  batchCheck: (clientIds?: string[]) => api.post('/precheck/batch', { client_ids: clientIds || [] }),
+  optimize: (clientId: string, period?: string) => api.get(`/optimize/${clientId}${period ? `?period=${period}` : ''}`),
+  batchOptimize: (clientIds?: string[]) => api.post('/optimize/batch', { client_ids: clientIds || [] }),
+  dpOptimize: (clientId: string) => api.get(`/dp-optimize/${clientId}`),
+  cliffCheck: (clientId: string) => api.get(`/cliff-check/${clientId}`),
+}
+
+// ===== 自学习引擎 =====
+export const learningApi = {
+  stats: () => api.get('/feedback/self-learning/stats'),
+  preview: (data: any) => api.post('/feedback/self-learning/preview', data),
 }
 
 export default api

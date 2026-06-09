@@ -1,6 +1,6 @@
 import json
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.db import get_db
@@ -207,6 +207,9 @@ async def ai_generate_voucher_api(document_ids: list[str], client_id: str = Quer
     trace = create_trace(db, "voucher", voucher.id, "ai_voucher")
     voucher.qr_code_path = trace.qr_code_path
 
+    commit(db, "voucher", voucher.id, "auto_created", "ai",
+           after={"voucher_no": voucher.voucher_no, "summary": voucher.summary, "total_debit": total_debit, "total_credit": total_credit})
+
     db.commit()
 
     return {
@@ -274,6 +277,8 @@ def update_voucher(voucher_id: str, data: VoucherUpdate, db: Session = Depends(g
 
     check_optimistic_lock(v, data.model_dump())
 
+    before = {"summary": v.summary, "entries": v.entries, "status": v.status}
+
     if data.summary is not None:
         v.summary = data.summary
     if data.entries is not None:
@@ -284,6 +289,10 @@ def update_voucher(voucher_id: str, data: VoucherUpdate, db: Session = Depends(g
         v.entries = json.dumps(entries, ensure_ascii=False)
         v.total_debit = td
         v.total_credit = tc
+
+    after = {"summary": v.summary, "entries": v.entries, "status": v.status}
+    commit(db, "voucher", voucher_id, "updated", user.display_name or "",
+           before=before, after=after)
 
     db.commit()
     return {"message": "凭证已更新", "id": voucher_id}
@@ -298,6 +307,8 @@ def delete_voucher(voucher_id: str, db: Session = Depends(get_db), user=Depends(
         raise HTTPException(status_code=403, detail="无权访问该客户数据")
     if v.status == "confirmed":
         raise HTTPException(status_code=400, detail="已确认的凭证不可删除")
+    commit(db, "voucher", voucher_id, "deleted", user.display_name or "",
+           before={"summary": v.summary, "voucher_no": v.voucher_no, "status": v.status})
     db.delete(v)
     db.commit()
     return {"message": "凭证已删除", "id": voucher_id}
@@ -305,9 +316,9 @@ def delete_voucher(voucher_id: str, db: Session = Depends(get_db), user=Depends(
 
 @router.post("/batch-confirm")
 def batch_confirm_vouchers(
-    voucher_ids: list[str],
-    reviewer: str = "批量审核",
-    comment: str = "",
+    voucher_ids: list[str] = Body(..., description="凭证ID列表"),
+    reviewer: str = Query("批量审核", description="审核人"),
+    comment: str = Query("", description="审核意见"),
     db: Session = Depends(get_db),
     user=Depends(require_modify),
 ):
@@ -326,8 +337,11 @@ def batch_confirm_vouchers(
             continue
         v.status = "confirmed"
         v.reviewer = reviewer
-        v.comment = comment or "批量审核通过"
+        v.review_comment = comment or "批量审核通过"
         create_trace(db, "voucher", v.id, "confirm")
+        commit(db, "voucher", v.id, "confirmed", reviewer,
+               before={"status": "draft", "voucher_no": v.voucher_no},
+               after={"status": "confirmed", "reviewer": reviewer})
         confirm_count += 1
 
     db.commit()

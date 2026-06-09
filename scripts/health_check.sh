@@ -5,7 +5,8 @@
 # 返回: 0 = 全部健康, 1 = 有异常
 # ============================================================
 
-BASE_URL="${1:-http://localhost}"
+BACKEND_URL="${1:-http://localhost:8000}"
+FRONTEND_URL="${2:-http://localhost:5173}"
 TIMEOUT=10
 FAILURES=0
 
@@ -25,19 +26,20 @@ check_url() {
 }
 
 echo "=== 健康检查 $(date '+%Y-%m-%d %H:%M:%S') ==="
-echo "目标: $BASE_URL"
+echo "后端: $BACKEND_URL  前端: $FRONTEND_URL"
 echo ""
 
-# 1. 前端 (nginx)
-check_url "前端首页"      "$BASE_URL/"
+# 1. 前端
+check_url "前端 (Vite)"   "$FRONTEND_URL/"
 
 # 2. 后端 API
-check_url "后端 API"      "$BASE_URL/api/"
-check_url "税务申报"      "$BASE_URL/api/filings/"
+check_url "后端健康检查"   "$BACKEND_URL/api/health"
+check_url "税务申报API"    "$BACKEND_URL/api/filings/"
+check_url "记账凭证API"    "$BACKEND_URL/api/vouchers/"
 
-# 3. 数据库连通 (通过后端健康接口)
-HEALTH=$(curl -s --connect-timeout "$TIMEOUT" "$BASE_URL/api/health" 2>/dev/null)
-if echo "$HEALTH" | grep -qi "ok\|healthy"; then
+# 3. 数据库连通
+HEALTH=$(curl -s --connect-timeout "$TIMEOUT" "$BACKEND_URL/api/health" 2>/dev/null)
+if echo "$HEALTH" | grep -qi "ok"; then
     green "  ✓ 数据库连通"
 else
     red "  ✗ 数据库连通 (健康检查失败)"

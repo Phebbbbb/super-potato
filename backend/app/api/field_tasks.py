@@ -49,18 +49,25 @@ def create_task(data: FieldTaskCreate, db: Session = Depends(get_db), user: User
 def update_task(task_id: str, data: dict, db: Session = Depends(get_db), _=Depends(get_current_user)):
     t = db.query(FieldTask).filter(FieldTask.id == task_id).first()
     if not t: raise HTTPException(404, "任务不存在")
+    before = {"title": t.title, "status": t.status, "assigned_to": t.assigned_to}
     for f in ["title","description","status","assigned_to","priority","deadline","notes"]:
         if f in data: setattr(t, f, data[f])
     if "attachments" in data:
         t.attachments = json.dumps(data["attachments"], ensure_ascii=False)
     if data.get("status") == "completed":
         t.completed_at = datetime.now()
+    commit(db, "field_task", task_id, "updated", data.get("assigned_to", "") or "",
+           before=before, after={"title": t.title, "status": t.status, "assigned_to": t.assigned_to})
     db.commit()
     return {"message": "任务已更新"}
 
 
 @router.delete("/{task_id}")
 def delete_task(task_id: str, db: Session = Depends(get_db), _=Depends(require_modify)):
+    t = db.query(FieldTask).filter(FieldTask.id == task_id).first()
+    if t:
+        commit(db, "field_task", task_id, "deleted", "",
+               before={"title": t.title, "task_type": t.task_type, "status": t.status})
     db.query(FieldTask).filter(FieldTask.id == task_id).delete()
     db.commit()
     return {"message": "任务已删除"}

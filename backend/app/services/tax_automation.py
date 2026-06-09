@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
-from app.services.playwright_helpers import detect_captcha, retry_with_backoff
+from app.services.playwright_helpers import detect_captcha, detect_anti_bot, retry_with_backoff, safe_goto, save_debug_snapshot
 from app.services.error_handler import log_error, log_info
 
 
@@ -38,67 +38,67 @@ TAX_BUREAU_CONFIGS = {
         "name": "北京市电子税务局",
         "login_url": "https://etax.beijing.chinatax.gov.cn/",
         "login_selectors": {
-            "username": "#username",
-            "password": "#password",
-            "submit": 'button[type="submit"]',
+            "username": '#username, input[name="username"], input[placeholder*="税号"], input[placeholder*="用户名"], input[placeholder*="账号"]',
+            "password": '#password, input[name="password"], input[type="password"]',
+            "submit": 'button[type="submit"], button:has-text("登录"), input[type="submit"]',
             "captcha_img": "#captcha_img",
             "captcha_input": "#captcha",
         },
         "filing_selectors": {
             "vat": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=增值税申报",
-                "input_period_sales": "#current_period_sales",
-                "input_tax_payable": "#tax_amount",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=申报成功",
+                "menu_declare": 'text=我要办税, text=税费申报, a:has-text("办税")',
+                "menu_item": 'text=增值税申报, text=增值税一般纳税人申报, text=增值税小规模纳税人申报',
+                "input_period_sales": '#current_period_sales, input[name*="sales"], input[placeholder*="销售额"]',
+                "input_tax_payable": '#tax_amount, input[name*="tax"], input[placeholder*="应纳税额"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=申报成功, text=提交成功',
             },
             "corporate_income": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=企业所得税申报",
-                "input_revenue": "#total_revenue",
-                "input_cost": "#total_cost",
-                "input_profit": "#total_profit",
-                "input_tax_payable": "#income_tax_payable",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=申报成功",
+                "menu_declare": 'text=我要办税, text=税费申报, a:has-text("办税")',
+                "menu_item": 'text=企业所得税申报, text=企业所得税月(季)度申报, text=居民企业所得税申报',
+                "input_revenue": '#total_revenue, input[name*="revenue"], input[placeholder*="营业收入"]',
+                "input_cost": '#total_cost, input[name*="cost"], input[placeholder*="营业成本"]',
+                "input_profit": '#total_profit, input[name*="profit"], input[placeholder*="利润"]',
+                "input_tax_payable": '#income_tax_payable, input[name*="incomeTax"], input[name*="tax"], input[placeholder*="所得税"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=申报成功, text=提交成功',
             },
             "surtax": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=附加税申报",
-                "input_vat_amount": "#vat_amount",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=申报成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=附加税申报, text=附加税费申报',
+                "input_vat_amount": '#vat_amount, input[name*="vatAmount"], input[name*="vat"], input[placeholder*="增值税"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=申报成功, text=提交成功',
             },
             "stamp_duty": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=印花税申报",
-                "input_taxable_amount": "#taxableAmount",
-                "input_tax_payable": "#stampTax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=申报成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=印花税申报',
+                "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="计税金额"]',
+                "input_tax_payable": '#stampTax, input[name*="stampTax"], input[name*="tax"], input[placeholder*="印花税"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=申报成功, text=提交成功',
             },
             "property_tax": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=房产税申报",
-                "input_property_value": "#propertyValue",
-                "input_tax_payable": "#propertyTax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=申报成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=房产税申报',
+                "input_property_value": '#propertyValue, input[name*="propertyValue"], input[placeholder*="原值"]',
+                "input_tax_payable": '#propertyTax, input[name*="propertyTax"], input[name*="tax"], input[placeholder*="房产税"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=申报成功, text=提交成功',
             },
             "land_use_tax": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=城镇土地使用税申报",
-                "input_land_area": "#landArea",
-                "input_tax_payable": "#landTax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=申报成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=城镇土地使用税申报',
+                "input_land_area": '#landArea, input[name*="landArea"], input[placeholder*="面积"]',
+                "input_tax_payable": '#landTax, input[name*="landTax"], input[name*="tax"], input[placeholder*="土地使用税"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=申报成功, text=提交成功',
             },
         },
     },
@@ -106,64 +106,64 @@ TAX_BUREAU_CONFIGS = {
         "name": "上海市电子税务局",
         "login_url": "https://etax.shanghai.chinatax.gov.cn/",
         "login_selectors": {
-            "username": 'input[name="username"]',
-            "password": 'input[name="password"]',
-            "submit": 'button:has-text("登录")',
+            "username": 'input[name="username"], input[placeholder*="税号"], input[placeholder*="用户名"]',
+            "password": 'input[name="password"], input[type="password"]',
+            "submit": 'button:has-text("登录"), input[type="submit"]',
         },
         "filing_selectors": {
             "vat": {
-                "menu_declare": "text=税费申报",
-                "menu_item": "text=增值税一般纳税人申报",
-                "input_period_sales": 'input[name="sales"]',
-                "input_tax_payable": 'input[name="taxPayable"]',
-                "btn_submit": "text=正式提交申报",
-                "btn_confirm": "text=确定",
+                "menu_declare": "text=税费申报, text=我要办税",
+                "menu_item": "text=增值税一般纳税人申报, text=增值税申报",
+                "input_period_sales": 'input[name="sales"], input[placeholder*="销售额"]',
+                "input_tax_payable": 'input[name="taxPayable"], input[name*="tax"]',
+                "btn_submit": "text=正式提交申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确定, button:has-text(\"确定\")",
                 "success_indicator": "text=申报成功",
             },
             "corporate_income": {
-                "menu_declare": "text=税费申报",
-                "menu_item": "text=企业所得税月(季)度申报",
-                "input_revenue": 'input[name="revenue"]',
-                "input_cost": 'input[name="cost"]',
-                "input_profit": 'input[name="profit"]',
-                "input_tax_payable": 'input[name="incomeTax"]',
-                "btn_submit": "text=正式提交申报",
-                "btn_confirm": "text=确定",
+                "menu_declare": "text=税费申报, text=我要办税",
+                "menu_item": "text=企业所得税月(季)度申报, text=企业所得税申报",
+                "input_revenue": 'input[name="revenue"], input[placeholder*="收入"]',
+                "input_cost": 'input[name="cost"], input[placeholder*="成本"]',
+                "input_profit": 'input[name="profit"], input[placeholder*="利润"]',
+                "input_tax_payable": 'input[name="incomeTax"], input[name*="tax"]',
+                "btn_submit": "text=正式提交申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确定, button:has-text(\"确定\")",
                 "success_indicator": "text=申报成功",
             },
             "surtax": {
-                "menu_declare": "text=税费申报",
-                "menu_item": "text=附加税费申报",
-                "input_vat_amount": 'input[name="vatAmount"]',
-                "btn_submit": "text=正式提交申报",
-                "btn_confirm": "text=确定",
+                "menu_declare": "text=税费申报, text=我要办税",
+                "menu_item": "text=附加税费申报, text=附加税申报",
+                "input_vat_amount": 'input[name="vatAmount"], input[name*="vat"]',
+                "btn_submit": "text=正式提交申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确定, button:has-text(\"确定\")",
                 "success_indicator": "text=申报成功",
             },
             "stamp_duty": {
                 "menu_declare": "text=税费申报",
                 "menu_item": "text=印花税申报",
-                "input_taxable_amount": 'input[name="taxableAmount"]',
-                "input_tax_payable": 'input[name="stampTax"]',
-                "btn_submit": "text=正式提交申报",
-                "btn_confirm": "text=确定",
+                "input_taxable_amount": 'input[name="taxableAmount"], input[placeholder*="计税金额"]',
+                "input_tax_payable": 'input[name="stampTax"], input[name*="tax"]',
+                "btn_submit": "text=正式提交申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确定, button:has-text(\"确定\")",
                 "success_indicator": "text=申报成功",
             },
             "property_tax": {
                 "menu_declare": "text=税费申报",
                 "menu_item": "text=房产税申报",
-                "input_property_value": 'input[name="propertyValue"]',
-                "input_tax_payable": 'input[name="propertyTax"]',
-                "btn_submit": "text=正式提交申报",
-                "btn_confirm": "text=确定",
+                "input_property_value": 'input[name="propertyValue"], input[placeholder*="原值"]',
+                "input_tax_payable": 'input[name="propertyTax"], input[name*="tax"]',
+                "btn_submit": "text=正式提交申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确定, button:has-text(\"确定\")",
                 "success_indicator": "text=申报成功",
             },
             "land_use_tax": {
                 "menu_declare": "text=税费申报",
                 "menu_item": "text=城镇土地使用税申报",
-                "input_land_area": 'input[name="landArea"]',
-                "input_tax_payable": 'input[name="landTax"]',
-                "btn_submit": "text=正式提交申报",
-                "btn_confirm": "text=确定",
+                "input_land_area": 'input[name="landArea"], input[placeholder*="面积"]',
+                "input_tax_payable": 'input[name="landTax"], input[name*="tax"]',
+                "btn_submit": "text=正式提交申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确定, button:has-text(\"确定\")",
                 "success_indicator": "text=申报成功",
             },
         },
@@ -172,39 +172,39 @@ TAX_BUREAU_CONFIGS = {
         "name": "广东省电子税务局",
         "login_url": "https://etax.guangdong.chinatax.gov.cn/",
         "login_selectors": {
-            "username": 'input[name="username"]',
-            "password": 'input[name="password"]',
-            "submit": 'button:has-text("登录")',
-            "captcha_img": "#captcha_img",
-            "captcha_input": "#captcha",
+            "username": 'input[name="username"], input[placeholder*="税号"], input[placeholder*="用户名"]',
+            "password": 'input[name="password"], input[type="password"]',
+            "submit": 'button:has-text("登录"), button[type="submit"]',
+            "captcha_img": "#captcha_img, img[src*=\"captcha\"]",
+            "captcha_input": "#captcha, input[placeholder*=\"验证码\"]",
         },
         "filing_selectors": {
             "vat": {
-                "menu_declare": "text=我要办税",
+                "menu_declare": "text=我要办税, text=税费申报",
                 "menu_item": "text=增值税申报",
-                "input_period_sales": 'input[name="salesAmount"]',
-                "input_tax_payable": 'input[name="taxAmount"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "input_period_sales": 'input[name="salesAmount"], input[placeholder*="销售额"]',
+                "input_tax_payable": 'input[name="taxAmount"], input[name*="tax"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "corporate_income": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=企业所得税申报",
-                "input_revenue": 'input[name="totalRevenue"]',
-                "input_cost": 'input[name="totalCost"]',
-                "input_profit": 'input[name="totalProfit"]',
-                "input_tax_payable": 'input[name="incomeTaxPayable"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_declare": "text=我要办税, text=税费申报",
+                "menu_item": "text=企业所得税申报, text=企业所得税月(季)度申报",
+                "input_revenue": 'input[name="totalRevenue"], input[placeholder*="收入"]',
+                "input_cost": 'input[name="totalCost"], input[placeholder*="成本"]',
+                "input_profit": 'input[name="totalProfit"], input[placeholder*="利润"]',
+                "input_tax_payable": 'input[name="incomeTaxPayable"], input[name*="tax"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "surtax": {
                 "menu_declare": "text=我要办税",
-                "menu_item": "text=附加税申报",
-                "input_vat_amount": 'input[name="vatAmount"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_item": "text=附加税申报, text=附加税费申报",
+                "input_vat_amount": 'input[name="vatAmount"], input[name*="vat"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "stamp_duty": {
@@ -212,8 +212,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=印花税申报",
                 "input_taxable_amount": 'input[name="taxableAmount"]',
                 "input_tax_payable": 'input[name="stampTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "property_tax": {
@@ -221,8 +221,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=房产税申报",
                 "input_property_value": 'input[name="propertyValue"]',
                 "input_tax_payable": 'input[name="propertyTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "land_use_tax": {
@@ -230,8 +230,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=城镇土地使用税申报",
                 "input_land_area": 'input[name="landArea"]',
                 "input_tax_payable": 'input[name="landTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
         },
@@ -240,37 +240,37 @@ TAX_BUREAU_CONFIGS = {
         "name": "浙江省电子税务局",
         "login_url": "https://etax.zhejiang.chinatax.gov.cn/",
         "login_selectors": {
-            "username": 'input[name="username"]',
-            "password": 'input[name="password"]',
-            "submit": 'button:has-text("登录")',
+            "username": 'input[name="username"], input[placeholder*="税号"], input[placeholder*="用户名"]',
+            "password": 'input[name="password"], input[type="password"]',
+            "submit": 'button:has-text("登录"), button[type="submit"]',
         },
         "filing_selectors": {
             "vat": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=增值税申报",
-                "input_period_sales": 'input[name="sales"]',
-                "input_tax_payable": 'input[name="taxPayable"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_declare": "text=我要办税, text=税费申报",
+                "menu_item": "text=增值税申报, text=增值税一般纳税人申报",
+                "input_period_sales": 'input[name="sales"], input[placeholder*="销售额"]',
+                "input_tax_payable": 'input[name="taxPayable"], input[name*="tax"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "corporate_income": {
                 "menu_declare": "text=我要办税",
-                "menu_item": "text=企业所得税月(季)度申报",
-                "input_revenue": 'input[name="revenue"]',
-                "input_cost": 'input[name="cost"]',
-                "input_profit": 'input[name="profit"]',
-                "input_tax_payable": 'input[name="tax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_item": "text=企业所得税月(季)度申报, text=企业所得税申报",
+                "input_revenue": 'input[name="revenue"], input[placeholder*="收入"]',
+                "input_cost": 'input[name="cost"], input[placeholder*="成本"]',
+                "input_profit": 'input[name="profit"], input[placeholder*="利润"]',
+                "input_tax_payable": 'input[name="tax"], input[name*="incomeTax"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "surtax": {
                 "menu_declare": "text=我要办税",
-                "menu_item": "text=附加税费申报",
-                "input_vat_amount": 'input[name="vatAmount"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_item": "text=附加税费申报, text=附加税申报",
+                "input_vat_amount": 'input[name="vatAmount"], input[name*="vat"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "stamp_duty": {
@@ -278,8 +278,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=印花税申报",
                 "input_taxable_amount": 'input[name="taxableAmount"]',
                 "input_tax_payable": 'input[name="stampTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "property_tax": {
@@ -287,8 +287,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=房产税申报",
                 "input_property_value": 'input[name="propertyValue"]',
                 "input_tax_payable": 'input[name="propertyTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "land_use_tax": {
@@ -296,8 +296,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=城镇土地使用税申报",
                 "input_land_area": 'input[name="landArea"]',
                 "input_tax_payable": 'input[name="landTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
         },
@@ -306,37 +306,37 @@ TAX_BUREAU_CONFIGS = {
         "name": "江苏省电子税务局",
         "login_url": "https://etax.jiangsu.chinatax.gov.cn/",
         "login_selectors": {
-            "username": 'input[name="username"]',
-            "password": 'input[name="password"]',
-            "submit": 'button:has-text("登录")',
+            "username": 'input[name="username"], input[placeholder*="税号"], input[placeholder*="用户名"]',
+            "password": 'input[name="password"], input[type="password"]',
+            "submit": 'button:has-text("登录"), button[type="submit"]',
         },
         "filing_selectors": {
             "vat": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=增值税申报",
-                "input_period_sales": 'input[name="salesAmount"]',
-                "input_tax_payable": 'input[name="taxAmount"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_declare": "text=我要办税, text=税费申报",
+                "menu_item": "text=增值税申报, text=增值税一般纳税人申报",
+                "input_period_sales": 'input[name="salesAmount"], input[placeholder*="销售额"]',
+                "input_tax_payable": 'input[name="taxAmount"], input[name*="tax"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "corporate_income": {
                 "menu_declare": "text=我要办税",
-                "menu_item": "text=居民企业所得税月(季)度申报",
-                "input_revenue": 'input[name="revenue"]',
-                "input_cost": 'input[name="cost"]',
-                "input_profit": 'input[name="profit"]',
-                "input_tax_payable": 'input[name="taxPayable"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_item": "text=居民企业所得税月(季)度申报, text=企业所得税申报",
+                "input_revenue": 'input[name="revenue"], input[placeholder*="收入"]',
+                "input_cost": 'input[name="cost"], input[placeholder*="成本"]',
+                "input_profit": 'input[name="profit"], input[placeholder*="利润"]',
+                "input_tax_payable": 'input[name="taxPayable"], input[name*="tax"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "surtax": {
                 "menu_declare": "text=我要办税",
-                "menu_item": "text=附加税申报",
-                "input_vat_amount": 'input[name="vatAmount"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "menu_item": "text=附加税申报, text=附加税费申报",
+                "input_vat_amount": 'input[name="vatAmount"], input[name*="vat"]',
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "stamp_duty": {
@@ -344,8 +344,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=印花税申报",
                 "input_taxable_amount": 'input[name="taxableAmount"]',
                 "input_tax_payable": 'input[name="stampTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "property_tax": {
@@ -353,8 +353,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=房产税申报",
                 "input_property_value": 'input[name="propertyValue"]',
                 "input_tax_payable": 'input[name="propertyTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
             "land_use_tax": {
@@ -362,8 +362,8 @@ TAX_BUREAU_CONFIGS = {
                 "menu_item": "text=城镇土地使用税申报",
                 "input_land_area": 'input[name="landArea"]',
                 "input_tax_payable": 'input[name="landTax"]',
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
+                "btn_submit": "text=申报, button:has-text(\"申报\")",
+                "btn_confirm": "text=确认, button:has-text(\"确认\")",
                 "success_indicator": "text=申报成功",
             },
         },
@@ -372,65 +372,65 @@ TAX_BUREAU_CONFIGS = {
         "name": "通用电子税务局",
         "login_url": "",
         "login_selectors": {
-            "username": "#username",
-            "password": "#password",
-            "submit": 'button[type="submit"]',
+            "username": '#username, input[name="username"], input[placeholder*="税号"], input[placeholder*="用户名"]',
+            "password": '#password, input[name="password"], input[type="password"]',
+            "submit": 'button[type="submit"], button:has-text("登录"), input[type="submit"]',
         },
         "filing_selectors": {
             "vat": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=增值税申报",
-                "input_period_sales": "#sales",
-                "input_tax_payable": "#tax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=增值税申报, text=增值税一般纳税人申报',
+                "input_period_sales": '#sales, input[name*="sales"], input[placeholder*="销售额"]',
+                "input_tax_payable": '#tax, input[name*="tax"], input[placeholder*="应纳税额"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=成功, text=申报成功, text=提交成功',
             },
             "corporate_income": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=企业所得税申报",
-                "input_revenue": "#revenue",
-                "input_cost": "#cost",
-                "input_profit": "#profit",
-                "input_tax_payable": "#incomeTax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=企业所得税申报, text=企业所得税月(季)度申报',
+                "input_revenue": '#revenue, input[name*="revenue"], input[placeholder*="收入"]',
+                "input_cost": '#cost, input[name*="cost"], input[placeholder*="成本"]',
+                "input_profit": '#profit, input[name*="profit"], input[placeholder*="利润"]',
+                "input_tax_payable": '#incomeTax, input[name*="incomeTax"], input[name*="taxPayable"]',
+                "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+                "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+                "success_indicator": 'text=成功, text=申报成功',
             },
             "surtax": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=附加税申报",
-                "input_vat_amount": "#vatAmount",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=附加税申报, text=附加税费申报',
+                "input_vat_amount": '#vatAmount, input[name*="vatAmount"], input[name*="vat"]',
+                "btn_submit": 'text=申报, button:has-text("申报")',
+                "btn_confirm": 'text=确认, button:has-text("确认")',
+                "success_indicator": 'text=成功, text=申报成功',
             },
             "stamp_duty": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=印花税申报",
-                "input_taxable_amount": "#taxableAmount",
-                "input_tax_payable": "#stampTax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=印花税申报',
+                "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"]',
+                "input_tax_payable": '#stampTax, input[name*="stampTax"]',
+                "btn_submit": 'text=申报, button:has-text("申报")',
+                "btn_confirm": 'text=确认, button:has-text("确认")',
+                "success_indicator": 'text=成功, text=申报成功',
             },
             "property_tax": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=房产税申报",
-                "input_property_value": "#propertyValue",
-                "input_tax_payable": "#propertyTax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=房产税申报',
+                "input_property_value": '#propertyValue, input[name*="propertyValue"]',
+                "input_tax_payable": '#propertyTax, input[name*="propertyTax"]',
+                "btn_submit": 'text=申报, button:has-text("申报")',
+                "btn_confirm": 'text=确认, button:has-text("确认")',
+                "success_indicator": 'text=成功, text=申报成功',
             },
             "land_use_tax": {
-                "menu_declare": "text=我要办税",
-                "menu_item": "text=城镇土地使用税申报",
-                "input_land_area": "#landArea",
-                "input_tax_payable": "#landTax",
-                "btn_submit": "text=申报",
-                "btn_confirm": "text=确认",
-                "success_indicator": "text=成功",
+                "menu_declare": 'text=我要办税, text=税费申报',
+                "menu_item": 'text=城镇土地使用税申报',
+                "input_land_area": '#landArea, input[name*="landArea"]',
+                "input_tax_payable": '#landTax, input[name*="landTax"]',
+                "btn_submit": 'text=申报, button:has-text("申报")',
+                "btn_confirm": 'text=确认, button:has-text("确认")',
+                "success_indicator": 'text=成功, text=申报成功',
             },
         },
     },
@@ -515,24 +515,52 @@ class TaxAutomationEngine:
         return count < 2  # 少于 2 个登录特征 → 可能已登录
 
     async def _safe_click(self, page, selector: str, step_name: str = "") -> bool:
-        """安全点击元素（多策略 + 重试）"""
-        try:
-            await retry_with_backoff(lambda: page.wait_for_selector(selector, timeout=self.timeout))
-            await page.click(selector)
-            return True
-        except Exception as e:
-            log_error("tax_auto", e, {"step": step_name, "selector": selector[:80]})
-            return False
+        """安全点击元素 — 支持逗号分隔的多策略回退链"""
+        selectors = [s.strip() for s in selector.split(",") if s.strip()]
+        for sel in selectors:
+            try:
+                await retry_with_backoff(
+                    lambda s=sel: page.wait_for_selector(s, timeout=self.timeout),
+                    max_retries=2,
+                )
+                await page.click(sel)
+                return True
+            except Exception:
+                continue
+        # 最终 fallback: text 匹配
+        if step_name:
+            try:
+                await page.locator(f'text="{step_name}"').first.click(timeout=5000)
+                return True
+            except Exception:
+                pass
+        log_error("tax_auto", Exception(f"所有选择器均失败: {selector}"), {"step": step_name})
+        return False
 
     async def _safe_fill(self, page, selector: str, value: str, step_name: str = "") -> bool:
-        """安全填写输入框（多策略 + 重试）"""
-        try:
-            await retry_with_backoff(lambda: page.wait_for_selector(selector, timeout=self.timeout))
-            await page.fill(selector, str(value))
+        """安全填写输入框 — 支持逗号分隔的多策略回退链"""
+        if not value:
             return True
-        except Exception as e:
-            log_error("tax_auto", e, {"step": step_name, "selector": selector[:80]})
-            return False
+        selectors = [s.strip() for s in selector.split(",") if s.strip()]
+        for sel in selectors:
+            try:
+                await retry_with_backoff(
+                    lambda s=sel: page.wait_for_selector(s, timeout=self.timeout),
+                    max_retries=2,
+                )
+                await page.fill(sel, str(value))
+                return True
+            except Exception:
+                continue
+        # 最终 fallback: placeholder/name 模糊匹配
+        if step_name:
+            try:
+                await page.locator(f'input[placeholder*="{step_name}"], input[name*="{step_name}"]').first.fill(str(value), timeout=5000)
+                return True
+            except Exception:
+                pass
+        log_error("tax_auto", Exception(f"所有选择器均失败: {selector}"), {"step": step_name, "value": str(value)[:50]})
+        return False
 
     async def run_filing(
         self,
@@ -585,7 +613,12 @@ class TaxAutomationEngine:
             try:
                 # ===== Step 1: 登录 =====
                 print(f"[自动申报] 登录 {self.config['name']}...")
-                await page.goto(login_url, wait_until="networkidle")
+                if not await safe_goto(page, login_url, timeout=self.timeout):
+                    return FilingResult(
+                        success=False,
+                        message=f"无法访问 {self.config['name']} ({login_url})，请检查网络或URL配置",
+                        failed_step="goto_login",
+                    )
 
                 login_s = self.config["login_selectors"]
                 await self._safe_fill(page, login_s["username"], credentials.get("username", ""), "用户名")
@@ -610,6 +643,17 @@ class TaxAutomationEngine:
 
                 login_ok = await self._check_login_success(page)
                 await self._screenshot(page, "after_login")
+
+                # 登录后检测风控
+                anti_bot_risk = await detect_anti_bot(page)
+                if anti_bot_risk:
+                    await self._save_debug(page, f"anti_bot_{anti_bot_risk}")
+                    return FilingResult(
+                        success=False, tax_type=tax_type, period=period,
+                        message=f"检测到风控限制({anti_bot_risk})，请稍后再试或切换网络环境",
+                        screenshot_paths=screenshots, failed_step=f"anti_bot_{anti_bot_risk}",
+                        steps_completed=steps_completed,
+                    )
                 screenshots.append(str(self.screenshot_dir / f"{self.run_id}_after_login.png"))
 
                 if not login_ok:
@@ -748,8 +792,11 @@ class TaxAutomationEngine:
             except Exception as e:
                 log_error("tax_auto", e, {"tax_type": tax_type, "period": period, "run_id": self.run_id})
                 failed_step = steps_completed[-1] if steps_completed else "unknown"
-                await self._save_debug(page, f"error_at_{failed_step}")
-                screenshots.append(str(self.screenshot_dir / f"{self.run_id}_error_at_{failed_step}.png"))
+                try:
+                    debug_path = await save_debug_snapshot(page, f"tax_auto_error_{self.run_id}_{failed_step}")
+                    screenshots.append(debug_path)
+                except Exception:
+                    pass
                 result = FilingResult(
                     success=False,
                     message=f"申报过程异常(步骤:{failed_step}): {str(e)[:150]}",

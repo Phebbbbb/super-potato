@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.user import User, UserClientAssignment
 from app.services.auth import hash_password, get_current_user, require_admin, validate_password_strength
+from app.services.version_control import commit
 
 router = APIRouter()
 
@@ -39,6 +40,8 @@ def create_user(data: dict, db: Session = Depends(get_db), _: User = Depends(req
         phone=data.get("phone", ""),
     )
     db.add(u)
+    commit(db, "user", u.id, "created", data.get("display_name", data["username"]),
+           after={"username": u.username, "role": u.role})
     db.commit()
     return {"id": u.id, "message": "用户创建成功"}
 
@@ -48,6 +51,7 @@ def update_user(user_id: str, data: dict, db: Session = Depends(get_db), _: User
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
+    before = {"display_name": u.display_name, "role": u.role, "is_active": u.is_active}
     for field in ["display_name", "role", "phone", "is_active"]:
         if field in data:
             setattr(u, field, data[field])
@@ -56,6 +60,8 @@ def update_user(user_id: str, data: dict, db: Session = Depends(get_db), _: User
         if err:
             raise HTTPException(status_code=400, detail=err)
         u.password_hash = hash_password(data["password"])
+    commit(db, "user", user_id, "updated", u.display_name,
+           before=before, after={"display_name": u.display_name, "role": u.role, "is_active": u.is_active})
     db.commit()
     return {"message": "用户已更新"}
 

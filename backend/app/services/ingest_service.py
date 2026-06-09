@@ -1,4 +1,4 @@
-"""RPA 数据接入服务：负责接收 RPA 推送的原始凭证数据，进行校验、去重、入库"""
+"""RPA 数据接入服务：负责接收 RPA 推送的原始凭证数据，进行校验、去重、入库 + 自学习纠错"""
 import json
 import os
 import base64
@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models.document import OriginalDocument
 from app.models.rpa_task import RPATask
+from app.services.self_learning import auto_correct
 from app.config import settings
 
 # 允许的文件类型
@@ -145,6 +146,29 @@ def ingest_documents(
 
             if file_base64:
                 file_path = save_base64_file(file_base64, file_name or "document.jpg")
+
+            # 2.5 自学习纠错: 对 OCR 结果逐字段尝试自动修正
+            auto_fixes_applied = 0
+            if ocr:
+                context = {
+                    "doc_type": doc_data.get("doc_type", ""),
+                    "file_name": file_name or "",
+                }
+                for vendor_key in ["seller_name", "buyer_name", "vendor_name"]:
+                    if ocr.get(vendor_key):
+                        context["vendor_name"] = ocr[vendor_key]
+                        break
+                corrected_ocr = dict(ocr)
+                for field, value in ocr.items():
+                    if not isinstance(value, str) or not value:
+                        continue
+                    result = auto_correct(db, "ocr", field, value, context)
+                    if result["auto_applied"] and result["corrected"] != value:
+                        corrected_ocr[field] = result["corrected"]
+                        auto_fixes_applied += 1
+                ocr = corrected_ocr
+                if auto_fixes_applied > 0:
+                    print(f"[自学习] {file_name}: 自动修正 {auto_fixes_applied} 个字段")
 
             # 3. 创建原始凭证记录
             doc = OriginalDocument(

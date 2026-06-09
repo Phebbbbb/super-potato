@@ -19,6 +19,9 @@ export default function Audit() {
   const [auditComment, setAuditComment] = useState('')
   const { currentClientId } = useClient()
   const { message } = App.useApp()
+  const userStr = localStorage.getItem('user')
+  const user = userStr ? JSON.parse(userStr) : null
+  const reviewer = user?.display_name || '审计员'
 
   const fetchAll = async () => {
     setLoading(true)
@@ -50,7 +53,7 @@ export default function Audit() {
 
   const handleVoucherConfirm = async () => {
     try {
-      await voucherApi.confirm(selectedVoucher.id, { reviewer: '内审员', comment: `[内审评分:${auditScore}/5] ${auditComment}` })
+      await voucherApi.confirm(selectedVoucher.id, { reviewer: reviewer, comment: `[内审评分:${auditScore}/5] ${auditComment}` })
       message.success('凭证审核通过')
       setConfirmOpen(false)
       fetchAll()
@@ -78,7 +81,7 @@ export default function Audit() {
   // Filing audit actions
   const handleFilingApprove = async (record: any) => {
     try {
-      await feedbackApi.reviewFiling(record.id, { action: 'approve', comment: '内审通过，提交申报', reviewer: '内审员' })
+      await feedbackApi.reviewFiling(record.id, { action: 'approve', comment: '内审通过，提交申报', reviewer: reviewer })
       message.success('申报已审核通过')
       fetchAll()
     } catch (e: any) { message.error(e?.response?.data?.detail || '审核失败') }
@@ -93,7 +96,7 @@ export default function Audit() {
       onOk: async () => {
         const reason = (document.getElementById('filing-reject-reason') as HTMLTextAreaElement)?.value || '内审驳回'
         try {
-          await feedbackApi.reviewFiling(record.id, { action: 'reject', comment: reason, reviewer: '内审员' })
+          await feedbackApi.reviewFiling(record.id, { action: 'reject', comment: reason, reviewer: reviewer })
           message.success('申报已驳回')
           fetchAll()
         } catch (e: any) { message.error(e?.response?.data?.detail || '驳回失败') }

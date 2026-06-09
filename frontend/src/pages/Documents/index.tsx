@@ -3,7 +3,7 @@ import { Card, Upload, Table, Button, Space, Tag, Modal, Image, Input, Form, Inp
 import { InboxOutlined, QrcodeOutlined, DeleteOutlined, EyeOutlined, EditOutlined, HistoryOutlined, RocketOutlined, CheckCircleOutlined, WarningOutlined, CloseCircleOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
-import { documentApi, feedbackApi } from '@/services/api'
+import { documentApi, feedbackApi, rpaApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
 import EmptyState from '@/components/EmptyState'
 import SkeletonTable from '@/components/SkeletonTable'
@@ -71,35 +71,20 @@ export default function Documents() {
           message.success(`${info.file.name} 上传成功并 OCR 识别完成`)
         }
 
-        // 延迟一下等 OCR 完成，然后自动触发全自动加工
-        setTimeout(() => {
-          modal.confirm({
-            title: '上传完成 — 是否立即自动处理？',
-            icon: <RocketOutlined />,
-            content: (
-              <div style={{ fontSize: 13 }}>
-                <p>系统将自动执行以下步骤：</p>
-                <Steps
-                  size="small"
-                  direction="vertical"
-                  current={-1}
-                  style={{ marginTop: 12 }}
-                  items={[
-                    { title: 'OCR 票据识别', description: '自动提取发票金额、买卖方、税率等信息' },
-                    { title: 'AI 智能生成记账凭证', description: '自动匹配科目、生成借贷分录、校验平衡' },
-                    { title: '自动确认高置信度凭证', description: '分录≤3行且匹配标准科目 → 自动确认' },
-                    { title: '自动创建纳税申报', description: '汇总凭证数据生成申报表，等待您审核提交' },
-                  ]}
-                />
-              </div>
-            ),
-            okText: '开始自动处理',
-            cancelText: '稍后手动处理',
-            onOk: async () => {
-              message.info('RPA 模块即将上线，敬请期待')
-            },
-          })
-        }, 1500)
+        // 全自动财税机器人：上传完成 → OCR → 自动加工全链（不询问）
+        setTimeout(async () => {
+          setProcessing(true)
+          setProcessResult(null)
+          try {
+            const res: any = await rpaApi.autoProcess(currentClientId || '')
+            setProcessResult(res)
+            message.success(res.summary || '全自动加工完成')
+            fetchDocuments()
+          } catch (e: any) {
+            message.error(e?.detail || e?.response?.data?.detail || '自动加工失败')
+          }
+          setProcessing(false)
+        }, 3000)
       }
     }
   }
@@ -123,14 +108,39 @@ export default function Documents() {
 
   // 手动触发全自动加工
   const handleManualProcess = async () => {
-    message.info('RPA 模块即将上线，敬请期待')
+    if (!currentClientId) { message.warning('请先选择客户'); return }
+    setProcessing(true)
+    setProcessResult(null)
+    try {
+      const res: any = await rpaApi.autoProcess(currentClientId)
+      setProcessResult(res)
+      message.success(res.summary || '全自动加工完成')
+      fetchDocuments()
+    } catch (e: any) {
+      message.error(e?.detail || e?.response?.data?.detail || '自动加工失败，请检查日志')
+    }
+    setProcessing(false)
   }
 
   // 一键申报提交
   const [submitting, setSubmitting] = useState(false)
   const [submitResult, setSubmitResult] = useState<any>(null)
   const handleAutoSubmit = async () => {
-    message.info('RPA 模块即将上线，敬请期待')
+    if (!currentClientId) { message.warning('请先选择客户'); return }
+    setSubmitting(true)
+    setSubmitResult(null)
+    try {
+      const res: any = await rpaApi.autoSubmitFilings(currentClientId)
+      setSubmitResult(res)
+      if (res.failed_count > 0) {
+        message.warning(res.message || `提交完成：${res.success_count}/${res.total} 成功`)
+      } else {
+        message.success(res.message || '全部申报提交成功')
+      }
+    } catch (e: any) {
+      message.error(e?.detail || e?.response?.data?.detail || '申报提交失败')
+    }
+    setSubmitting(false)
   }
 
   // 跳转到报税中心

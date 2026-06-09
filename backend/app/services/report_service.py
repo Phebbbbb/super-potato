@@ -41,6 +41,7 @@ def get_confirmed_entries(db: Session, start_date: str, end_date: str) -> list[d
                 "debit": e.get("debit", 0) or 0,
                 "credit": e.get("credit", 0) or 0,
                 "summary": e.get("summary", v.summary),
+                "client_id": v.client_id or "",
             })
     return entries
 
@@ -351,35 +352,136 @@ def cash_flow_statement(db: Session, period: str) -> list[dict]:
     ]
 
 
-def dashboard_data(db: Session) -> dict:
-    """首页仪表盘数据"""
+def _month_range(year: int, month: int):
+    """返回某月的起止日期字符串"""
+    start = f"{year}-{month:02d}-01"
+    if month == 12:
+        end = f"{year}-12-31"
+    else:
+        from calendar import monthrange
+        end = f"{year}-{month:02d}-{monthrange(year, month)[1]}"
+    return start, end
+
+
+def _sum_by_account(entries: list[dict], prefixes: list[str], side: str = "credit") -> float:
+    """按科目前缀汇总发生额"""
+    return round(sum(
+        e[side] for e in entries
+        if any(e["account_code"].startswith(p) for p in prefixes)
+    ), 2)
+
+
+def dashboard_data(db: Session, client_id: str = None) -> dict:
+    """经营分析仪表盘 — 对标亿企赢 KPI 驾驶舱"""
     from datetime import date as dt_date
+    from app.models.document import OriginalDocument
+    from app.models.filing import TaxFiling
+
     today = dt_date.today()
-    month_start = today.replace(day=1).isoformat()
-    month_end = today.isoformat()
+    month_start, month_end = _month_range(today.year, today.month)
 
-    # 本月凭证数
-    voucher_count = (
-        db.query(func.count(AccountingVoucher.id))
-        .filter(
-            AccountingVoucher.status == "confirmed",
-            AccountingVoucher.voucher_date >= month_start,
-            AccountingVoucher.voucher_date <= month_end,
-        )
-        .scalar()
-    ) or 0
+    # 限定客户范围
+    voucher_filter = [AccountingVoucher.status == "confirmed"]
+    doc_filter = []
+    filing_filter = []
+    if client_id:
+        voucher_filter.append(AccountingVoucher.client_id == client_id)
+        doc_filter.append(OriginalDocument.client_id == client_id)
+        filing_filter.append(TaxFiling.client_id == client_id)
 
-    # 本月收入和支出（从分录汇总）
+    # === 本月核心指标 ===
     entries = get_confirmed_entries(db, month_start, month_end)
-    total_income = sum(e["credit"] for e in entries if e["account_code"].startswith("6") and e["account_code"] not in ("6401", "6402", "6403", "6601", "6602", "6603", "6701", "6711", "6801"))  # 收入类贷方
-    total_expense = sum(e["debit"] for e in entries if e["account_code"].startswith("6") and e["account_code"] in ("6601", "6602", "6603"))  # 三费
+    if client_id:
+        entries = [e for e in entries if e.get("client_id") == client_id]
 
-    # 粗略估算应纳税额
-    estimated_tax = round((total_income - total_expense) * 0.05, 2) if total_income > total_expense else 0
+    revenue = _sum_by_account(entries, ["6001", "6051"], "credit")  # 主营业务收入 + 其他业务收入
+    cost = _sum_by_account(entries, ["6401", "6402", "6403"], "debit")  # 主营业务成本
+    selling_exp = _sum_by_account(entries, ["6601"], "debit")  # 销售费用
+    admin_exp = _sum_by_account(entries, ["6602"], "debit")  # 管理费用
+    finance_exp = _sum_by_account(entries, ["6603"], "debit")  # 财务费用
+    total_expenses = round(cost + selling_exp + admin_exp + finance_exp, 2)
+    gross_profit = round(revenue - cost, 2)
+    profit_margin = round((gross_profit / revenue * 100), 1) if revenue > 0 else 0
+
+    # 税金
+    output_vat = _sum_by_account(entries, ["2221001"], "credit")  # 销项税额
+    input_vat = _sum_by_account(entries, ["2221002"], "debit")  # 进项税额 (借方)
+
+    # === 资产负债快照 ===
+    cash_bank = _sum_by_account(entries, ["1001", "1002"], "debit") - _sum_by_account(entries, ["1001", "1002"], "credit")
+    ar = _sum_by_account(entries, ["1122"], "debit") - _sum_by_account(entries, ["1122"], "credit")
+    ap = _sum_by_account(entries, ["2202"], "credit") - _sum_by_account(entries, ["2202"], "debit")
+
+    # === 近6个月趋势 ===
+    revenue_trend = []
+    tax_trend = []
+    for i in range(5, -1, -1):
+        m = today.month - i
+        y = today.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        ms, me = _month_range(y, m)
+        month_entries = get_confirmed_entries(db, ms, me)
+        if client_id:
+            month_entries = [e for e in month_entries if e.get("client_id") == client_id]
+        month_revenue = _sum_by_account(month_entries, ["6001", "6051"], "credit")
+        month_vat = _sum_by_account(month_entries, ["2221001"], "credit") - _sum_by_account(month_entries, ["2221002"], "debit")
+        revenue_trend.append({"month": f"{y}-{m:02d}", "revenue": month_revenue, "vat": round(max(month_vat, 0), 2)})
+        tax_trend.append({"month": f"{y}-{m:02d}", "tax_burden": round((month_vat / month_revenue * 100), 2) if month_revenue > 0 else 0})
+
+    # === 运营效率指标 ===
+    doc_count = db.query(func.count(OriginalDocument.id)).filter(*doc_filter).scalar() or 0
+    doc_processed = db.query(func.count(OriginalDocument.id)).filter(
+        OriginalDocument.ocr_status == "done", *doc_filter
+    ).scalar() or 0
+
+    voucher_total = db.query(func.count(AccountingVoucher.id)).filter(*voucher_filter).scalar() or 0
+    # 本月凭证
+    voucher_month = db.query(func.count(AccountingVoucher.id)).filter(
+        AccountingVoucher.status == "confirmed",
+        AccountingVoucher.voucher_date >= month_start,
+        AccountingVoucher.voucher_date <= month_end,
+        *([AccountingVoucher.client_id == client_id] if client_id else []),
+    ).scalar() or 0
+
+    pending_filings = db.query(func.count(TaxFiling.id)).filter(
+        TaxFiling.status == "pending", *filing_filter
+    ).scalar() or 0
+    submitted_filings = db.query(func.count(TaxFiling.id)).filter(
+        TaxFiling.status.in_(["submitted", "success"]), *filing_filter
+    ).scalar() or 0
 
     return {
-        "monthly_voucher_count": voucher_count,
-        "monthly_income": round(total_income, 2),
-        "monthly_expense": round(total_expense, 2),
-        "estimated_tax": max(estimated_tax, 0),
+        "current_month": {
+            "revenue": revenue,
+            "cost": cost,
+            "gross_profit": gross_profit,
+            "profit_margin": profit_margin,
+            "selling_exp": selling_exp,
+            "admin_exp": admin_exp,
+            "finance_exp": finance_exp,
+            "total_expenses": total_expenses,
+            "output_vat": output_vat,
+            "input_vat": input_vat,
+            "vat_payable": round(max(output_vat - input_vat, 0), 2),
+            "est_cit": round(max(gross_profit * 0.025, 0), 2) if gross_profit > 0 else 0,
+        },
+        "balance": {
+            "cash_bank": round(max(cash_bank, 0), 2),
+            "accounts_receivable": round(max(ar, 0), 2),
+            "accounts_payable": round(max(ap, 0), 2),
+        },
+        "trends": {
+            "revenue": revenue_trend,
+            "tax_burden": tax_trend,
+        },
+        "operations": {
+            "total_documents": doc_count,
+            "documents_processed": doc_processed,
+            "total_vouchers": voucher_total,
+            "vouchers_this_month": voucher_month,
+            "pending_filings": pending_filings,
+            "submitted_filings": submitted_filings,
+        },
     }

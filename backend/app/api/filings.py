@@ -204,6 +204,29 @@ def update_filing(filing_id: str, data: FilingUpdate, db: Session = Depends(get_
     return {"message": "申报状态已更新", "filing_id": filing_id, "status": f.status}
 
 
+@router.delete("/{filing_id}")
+def delete_filing(filing_id: str, db: Session = Depends(get_db), user=Depends(require_modify)):
+    """删除纳税申报记录"""
+    f = db.query(TaxFiling).filter(TaxFiling.id == filing_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="申报记录不存在")
+    if f.client_id and not check_client_access(f.client_id, user, db):
+        raise HTTPException(status_code=403, detail="无权访问该客户数据")
+
+    commit(db, "tax_filing", filing_id, "deleted", user.display_name or "",
+           before={"tax_type": f.tax_type, "period": f.period, "status": f.status})
+
+    # 清理关联的 RPA 任务
+    if f.rpa_task_id:
+        task = db.query(RPATask).filter(RPATask.id == f.rpa_task_id).first()
+        if task:
+            db.delete(task)
+
+    db.delete(f)
+    db.commit()
+    return {"message": "申报记录已删除", "filing_id": filing_id}
+
+
 @router.post("/preview")
 def preview_filing_data(data: dict, db: Session = Depends(get_db)):
     """预览申报数据 — 从已确认凭证自动计算，不保存"""

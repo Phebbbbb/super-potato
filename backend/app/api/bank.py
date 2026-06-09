@@ -69,9 +69,12 @@ def trigger_auto_match(bank_account_id: str, db: Session = Depends(get_db), _=De
 def manual_match(statement_id: str, data: dict, db: Session = Depends(get_db), _=Depends(require_modify)):
     line = db.query(BankStatementLine).filter(BankStatementLine.id == statement_id).first()
     if not line: raise HTTPException(404, "流水不存在")
+    before = {"match_status": line.match_status, "matched_voucher_id": line.matched_voucher_id}
     line.match_status = "manual_matched"
     line.matched_voucher_id = data.get("voucher_id", "")
     line.match_confidence = 1.0
+    commit(db, "bank_statement", statement_id, "updated", "manual",
+           before=before, after={"match_status": "manual_matched", "matched_voucher_id": line.matched_voucher_id})
     db.commit()
     return {"message": "手动匹配成功"}
 
@@ -80,9 +83,12 @@ def manual_match(statement_id: str, data: dict, db: Session = Depends(get_db), _
 def unmatch(statement_id: str, db: Session = Depends(get_db), _=Depends(require_modify)):
     line = db.query(BankStatementLine).filter(BankStatementLine.id == statement_id).first()
     if not line: raise HTTPException(404, "流水不存在")
+    before = {"match_status": line.match_status, "matched_voucher_id": line.matched_voucher_id}
     line.match_status = "unmatched"
     line.matched_voucher_id = None
     line.match_confidence = 0
+    commit(db, "bank_statement", statement_id, "updated", "manual",
+           before=before, after={"match_status": "unmatched", "matched_voucher_id": None})
     db.commit()
     return {"message": "已取消匹配"}
 

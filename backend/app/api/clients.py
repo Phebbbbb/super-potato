@@ -87,11 +87,14 @@ def update_client(client_id: str, data: dict, db: Session = Depends(get_db), use
     c = db.query(Client).filter(Client.id == client_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="客户不存在")
+    before = {"name": c.name, "taxpayer_type": c.taxpayer_type, "industry": c.industry, "is_active": c.is_active}
     for field in ["name", "taxpayer_type", "industry", "address", "contact_person", "contact_phone", "remark", "is_active"]:
         if field in data:
             setattr(c, field, data[field])
     if "tax_no" in data:
         c.tax_no = data["tax_no"]
+    commit(db, "client", client_id, "updated", user.display_name or "admin",
+           before=before, after={"name": c.name, "taxpayer_type": c.taxpayer_type, "industry": c.industry, "is_active": c.is_active})
     db.commit()
     cache_invalidate("clients:*")
     return {"message": "客户信息已更新"}
@@ -102,6 +105,8 @@ def delete_client(client_id: str, db: Session = Depends(get_db), user: User = De
     c = db.query(Client).filter(Client.id == client_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="客户不存在")
+    commit(db, "client", client_id, "deleted", user.display_name or "admin",
+           before={"name": c.name, "tax_no": c.tax_no, "is_active": c.is_active})
     db.delete(c)
     db.commit()
     cache_invalidate("clients:*")

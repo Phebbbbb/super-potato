@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.system_config import SystemConfig
-from app.services.auth import require_admin
+from app.models.user import User
+from app.services.auth import require_admin, get_current_user
+from app.services.version_control import commit
 from app.services.cache import cache_get, cache_set, cache_invalidate
 from app.config import encrypt_config_value, decrypt_config_value
 
@@ -61,9 +63,10 @@ def get_config(config_key: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{config_key}")
-def update_config(config_key: str, data: dict, db: Session = Depends(get_db), _=Depends(require_admin)):
+def update_config(config_key: str, data: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user), _=Depends(require_admin)):
     cfg = db.query(SystemConfig).filter(SystemConfig.config_key == config_key).first()
     value_str = _store_value(config_key, data.get("config_value", data))
+    before = {"config_key": config_key, "exists": cfg is not None}
     if cfg:
         cfg.config_value = value_str
     else:
@@ -73,6 +76,8 @@ def update_config(config_key: str, data: dict, db: Session = Depends(get_db), _=
             config_value=value_str,
         )
         db.add(cfg)
+    commit(db, "system_config", config_key, "updated", user.display_name or "admin",
+           before=before, after={"config_key": config_key, "exists": True})
     db.commit()
     cache_invalidate(f"settings:{config_key}")
     return {"config_key": config_key, "message": "保存成功"}

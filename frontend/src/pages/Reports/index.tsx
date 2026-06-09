@@ -15,7 +15,7 @@ function generatePeriods() {
 const PERIODS = generatePeriods()
 
 export default function Reports() {
-  const [period, setPeriod] = useState('2026-06')
+  const [period, setPeriod] = useState(PERIODS[0] || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`)
   const [loading, setLoading] = useState(false)
   const [trialBalance, setTrialBalance] = useState<any[]>([])
   const [incomeStatement, setIncomeStatement] = useState<any>(null)

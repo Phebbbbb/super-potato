@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Button, Select, Tag, Space, Dropdown, Avatar, Badge, Drawer, Grid } from 'antd'
+import { Layout, Menu, Button, Select, Tag, Space, Dropdown, Avatar, Badge, Drawer, Grid, List, Typography } from 'antd'
 import {
   DashboardOutlined,
   FileTextOutlined,
@@ -26,8 +26,16 @@ import {
   NotificationOutlined,
   PrinterOutlined,
   MenuOutlined,
+  FundOutlined,
+  CalculatorOutlined,
+  SoundOutlined,
+  AlertOutlined,
 } from '@ant-design/icons'
 import { useClient } from '@/contexts/ClientContext'
+import { notificationApi } from '@/services/api'
+import dayjs from 'dayjs'
+
+const { Text } = Typography
 
 const { Header, Sider, Content, Footer } = Layout
 const { useBreakpoint } = Grid
@@ -39,6 +47,7 @@ const menuItems = [
     key: 'group-tax', icon: <AuditOutlined />, label: '涉税申报',
     children: [
       { key: '/tax-filings', icon: <FileTextOutlined />, label: '全税种申报' },
+      { key: '/tax-settlement', icon: <CalculatorOutlined />, label: '汇算清缴' },
       { key: '/invoicing', icon: <FileTextOutlined />, label: '开票中心' },
     ],
   },
@@ -56,6 +65,8 @@ const menuItems = [
       { key: '/reports', icon: <BarChartOutlined />, label: '财务报表' },
       { key: '/payroll', icon: <DollarOutlined />, label: '薪酬台账' },
       { key: '/bank-reconciliation', icon: <BankOutlined />, label: '银企对账' },
+      { key: '/fixed-assets', icon: <BankOutlined />, label: '固定资产' },
+      { key: '/contracts', icon: <FileTextOutlined />, label: '合同管理' },
       { key: '/print-center', icon: <PrinterOutlined />, label: '账簿打印' },
     ],
   },
@@ -69,6 +80,7 @@ const menuItems = [
   },
   { type: 'divider' as const },
   { key: '/clients', icon: <TeamOutlined />, label: '客户管理' },
+  { key: '/annual-reports', icon: <FileProtectOutlined />, label: '工商年报' },
   { key: '/field-tasks', icon: <EnvironmentOutlined />, label: '外勤任务' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
   { key: '/guide', icon: <ReadOutlined />, label: '使用手册' },
@@ -109,6 +121,132 @@ export default function MainLayout() {
   }
 
   const currentClient = clientList.find(c => c.id === currentClientId)
+
+  // 消息通知
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [notifications, setNotifications] = useState<any[]>([])
+  const [notifLoading, setNotifLoading] = useState(false)
+
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const res: any = await notificationApi.count()
+      setUnreadCount(res.unread || 0)
+    } catch { /* ignore */ }
+  }, [])
+
+  const fetchNotifications = useCallback(async () => {
+    setNotifLoading(true)
+    try {
+      const res: any = await notificationApi.list({ limit: 20 })
+      setNotifications(res.items || [])
+      setUnreadCount(res.total_unread || 0)
+    } catch { /* ignore */ }
+    setNotifLoading(false)
+  }, [])
+
+  useEffect(() => {
+    fetchUnreadCount()
+    const timer = setInterval(fetchUnreadCount, 60000)
+    return () => clearInterval(timer)
+  }, [fetchUnreadCount])
+
+  const handleBellClick = () => {
+    fetchNotifications()
+  }
+
+  const handleNotifClick = async (item: any) => {
+    if (!item.is_read) {
+      try {
+        await notificationApi.markRead(item.id)
+        setUnreadCount(c => Math.max(0, c - 1))
+        setNotifications(prev =>
+          prev.map(n => n.id === item.id ? { ...n, is_read: true } : n)
+        )
+      } catch { /* ignore */ }
+    }
+    if (item.link) {
+      navigate(item.link)
+    }
+  }
+
+  const handleMarkAllRead = async () => {
+    try {
+      await notificationApi.markAllRead()
+      setUnreadCount(0)
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
+    } catch { /* ignore */ }
+  }
+
+  const notifTypeIcon = (type: string) => {
+    switch (type) {
+      case 'announcement': return <SoundOutlined style={{ color: '#2563eb' }} />
+      case 'deadline': return <AlertOutlined style={{ color: '#dc2626' }} />
+      case 'risk': return <AlertOutlined style={{ color: '#d97706' }} />
+      case 'rpa': return <FundOutlined style={{ color: '#7c3aed' }} />
+      default: return <BellOutlined style={{ color: '#64748b' }} />
+    }
+  }
+
+  const notificationDropdown = (
+    <div style={{ width: 380, maxHeight: 420, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #e2e8f0' }}>
+        <Text strong style={{ fontSize: 13 }}>消息中心</Text>
+        {unreadCount > 0 && (
+          <Button type="link" size="small" onClick={handleMarkAllRead} style={{ fontSize: 12, padding: 0 }}>
+            全部已读
+          </Button>
+        )}
+      </div>
+      <div style={{ maxHeight: 360, overflow: 'auto' }}>
+        {notifications.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+            <BellOutlined style={{ fontSize: 32, marginBottom: 8 }} />
+            <div style={{ fontSize: 12 }}>暂无消息</div>
+          </div>
+        ) : (
+          <List
+            loading={notifLoading}
+            dataSource={notifications}
+            renderItem={(item: any) => (
+              <div
+                key={item.id}
+                onClick={() => handleNotifClick(item)}
+                style={{
+                  padding: '10px 12px',
+                  cursor: 'pointer',
+                  background: item.is_read ? 'transparent' : '#f0f7ff',
+                  borderBottom: '1px solid #f1f5f9',
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
+                onMouseLeave={e => (e.currentTarget.style.background = item.is_read ? 'transparent' : '#f0f7ff')}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <span style={{ marginTop: 1 }}>{notifTypeIcon(item.type)}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: item.is_read ? 400 : 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.title}
+                    </div>
+                    {item.message && (
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {item.message}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                      {item.created_at ? dayjs(item.created_at).format('MM-DD HH:mm') : ''}
+                    </div>
+                  </div>
+                  {!item.is_read && (
+                    <div style={{ width: 6, height: 6, borderRadius: 3, background: '#2563eb', marginTop: 6, flexShrink: 0 }} />
+                  )}
+                </div>
+              </div>
+            )}
+          />
+        )}
+      </div>
+    </div>
+  )
 
   const sidebarMenu = (
     <>
@@ -219,12 +357,14 @@ export default function MainLayout() {
                 <Button type="text" icon={<CustomerServiceOutlined />} onClick={() => navigate('/ai-agent')} style={{ fontSize: 13 }}>
                   AI 税务助手
                 </Button>
-                <Button type="text" icon={<NotificationOutlined />} onClick={() => navigate('/audit')} style={{ fontSize: 13 }}>
+                <Button type="text" icon={<NotificationOutlined />} onClick={() => navigate('/operation-log')} style={{ fontSize: 13 }}>
                   操作日志
                 </Button>
-                <Badge count={2} size="small" offset={[-2, 4]}>
-                  <Button type="text" icon={<BellOutlined />} style={{ fontSize: 15 }} />
-                </Badge>
+                <Dropdown dropdownRender={() => notificationDropdown} trigger={['click']} placement="bottomRight">
+                  <Badge count={unreadCount} size="small" offset={[-2, 4]}>
+                    <Button type="text" icon={<BellOutlined />} style={{ fontSize: 15 }} onClick={handleBellClick} />
+                  </Badge>
+                </Dropdown>
               </Space>
               <div style={{ width: 1, height: 20, background: '#e2e8f0' }} />
             </>
@@ -318,7 +458,7 @@ export default function MainLayout() {
           transition: 'left 0.2s',
           flexWrap: 'wrap',
         }}>
-          <span>京ICP备2026XXXXXX号 | 京财税备2026XXXX号</span>
+          <span>智能财税系统 · 数据加密存储 · 依法合规留存</span>
           {!isMobile && <span>实名留痕 · 加密存储 · 依法留存</span>}
           <span>税务热线：12366</span>
         </Footer>

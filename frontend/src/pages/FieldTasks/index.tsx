@@ -22,6 +22,7 @@ export default function FieldTasks() {
   const [editForm] = Form.useForm()
   const { currentClientId } = useClient()
   const { message } = App.useApp()
+  const [capturedImages, setCapturedImages] = useState<Record<string, File>>({})
 
   const fetchTasks = async () => {
     if (!currentClientId) return
@@ -90,17 +91,32 @@ export default function FieldTasks() {
           <Button type="link" size="small" onClick={() => { setSelected(r); setDetailOpen(true) }}>详情</Button>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)}>编辑</Button>
           <Button type="link" size="small" icon={<CameraOutlined />}
+            style={{ color: capturedImages[r.id] ? '#16a34a' : undefined }}
             onClick={() => {
               const input = document.createElement('input')
               input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment'
               input.onchange = async (e: any) => {
                 const file = e.target.files?.[0]
                 if (file) {
-                  message.success(`${file.name} 已选择，请保存任务时上传`)
+                  setCapturedImages(prev => ({ ...prev, [r.id]: file }))
+                  message.success(`${file.name} 已捕获，完成或更新任务时将上传`)
                 }
               }
               input.click()
             }} />
+          {capturedImages[r.id] && (
+            <Button type="link" size="small" onClick={async () => {
+              const file = capturedImages[r.id]
+              if (!file) return
+              const fd = new FormData()
+              fd.append('file', file)
+              try {
+                await fetch(`/api/documents/upload?client_id=${currentClientId}`, { method: 'POST', body: fd })
+                message.success('现场照片已上传至票据中心')
+                setCapturedImages(prev => { const n = { ...prev }; delete n[r.id]; return n })
+              } catch { message.error('上传失败') }
+            }} style={{ color: '#16a34a' }}>上传</Button>
+          )}
           {r.status !== 'completed' && <Button type="link" size="small" onClick={() => handleComplete(r.id)}>完成</Button>}
           <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => {
             Modal.confirm({ title: '确认删除?', content: `将删除任务: ${r.title}`, onOk: () => handleDelete(r.id) })
@@ -148,7 +164,7 @@ export default function FieldTasks() {
           <Form.Item label="优先级" name="priority"><Select options={[{ label: '普通', value: 'normal' }, { label: '高', value: 'high' }, { label: '紧急', value: 'urgent' }]} /></Form.Item>
           <Form.Item label="截止日期" name="deadline"><DatePicker style={{ width: '100%' }} /></Form.Item>
           <Form.Item label="附件（现场照片）" name="attachments">
-            <Upload multiple listType="picture" beforeUpload={() => false}>
+            <Upload multiple listType="picture" customRequest={(opt: any) => setTimeout(() => opt.onSuccess?.(), 0)}>
               <Button icon={<UploadOutlined />}>选择照片</Button>
             </Upload>
           </Form.Item>
