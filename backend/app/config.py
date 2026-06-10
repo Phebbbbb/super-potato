@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_password: str = ""
 
+    # WeChat OAuth
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
+    wechat_token: str = ""
+    wechat_encoding_aes_key: str = ""
+
     # LLM
     llm_provider: str = "claude"
     llm_api_key: str = ""

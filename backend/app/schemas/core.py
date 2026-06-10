@@ -49,6 +49,7 @@ class VoucherCreate(BaseModel):
     voucher_date: date
     summary: str = Field(default="", max_length=500)
     entries: list[VoucherEntry] = Field(default_factory=list)
+    maker: str = Field(default="", max_length=50)  # 制单人
 
     @field_validator("entries")
     @classmethod

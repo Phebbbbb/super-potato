@@ -7,7 +7,7 @@ from app.db import get_db
 from app.models.filing import TaxFiling
 from app.services.tax_service import preview_filing
 from app.services.tax_automation import TaxAutomationEngine, TAX_BUREAU_CONFIGS
-from app.services.auth import require_modify
+from app.services.auth import require_modify, get_current_user
 from datetime import datetime
 
 router = APIRouter()
@@ -107,10 +107,14 @@ def list_profiles():
 
 
 @router.get("/screenshot/{filename}")
-def get_screenshot(filename: str):
+def get_screenshot(filename: str, _=Depends(get_current_user)):
     """获取申报截图"""
-    import glob
+    # 文件名校验：拒绝路径穿越字符
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    import re
+    safe_filename = re.sub(r'[<>:"|?*]', '', filename)[:100]
     from pathlib import Path
-    for path in Path("uploads/tax_screenshots").glob(f"*{filename}*"):
+    for path in Path("uploads/tax_screenshots").glob(f"*{safe_filename}*"):
         return FileResponse(str(path))
     raise HTTPException(status_code=404, detail="截图不存在")

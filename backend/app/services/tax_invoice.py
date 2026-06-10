@@ -260,7 +260,7 @@ async def _click_by_selectors(page, selector_str: str, step: str = "") -> bool:
             el = page.locator(sel).first
             if await el.count() > 0:
                 await el.click()
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.3)
                 return True
         except Exception:
             continue
@@ -322,7 +322,6 @@ async def issue_invoice_playwright(
             log_info("tax_invoice", "step1_login", f"invoice={rid} province={province}")
             await safe_goto(page, bureau["login_url"], timeout=config["timeout"])
             await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_01_login.png"))
-            await asyncio.sleep(3)
 
             if not username:
                 result["message"] = "未配置电子税务局账号，请在 Settings → 系统配置中设置 tax_bureau_auth"
@@ -331,7 +330,8 @@ async def issue_invoice_playwright(
             await _fill_by_selectors(page, login_s["username"], username, "用户名")
             await _fill_by_selectors(page, login_s["password"], password, "密码")
             await _click_by_selectors(page, login_s["submit"], "登录按钮")
-            await asyncio.sleep(5)
+            try: await page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception: await asyncio.sleep(2)
 
             # 检测验证码
             if await detect_captcha(page):
@@ -351,17 +351,17 @@ async def issue_invoice_playwright(
             # === Step 2: 导航到开票页 ===
             log_info("tax_invoice", "step2_navigate", f"invoice={rid}")
             await safe_goto(page, bureau["invoice_url"], timeout=config["timeout"])
-            await asyncio.sleep(4)
             await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_02_page.png"))
 
             await _click_by_selectors(page, inv_s["btn_new"], "开票按钮")
-            await asyncio.sleep(3)
+            try: await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception: pass
 
             # === Step 3: 选择发票类型 ===
             type_sel = inv_s["btn_invoice_type"].get(invoice_type, "")
             if type_sel:
                 await _click_by_selectors(page, type_sel, "发票类型")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.3)
 
             # === Step 4: 填写购方信息 ===
             log_info("tax_invoice", "step4_buyer", f"buyer={buyer_name}")
@@ -378,7 +378,7 @@ async def issue_invoice_playwright(
             for i, item in enumerate(items):
                 if i > 0:
                     await _click_by_selectors(page, inv_s["btn_add_row"], "新增行")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.3)
 
                 await _fill_by_selectors(page, inv_s["item_name"], item.get("name", ""), "货物名称")
                 await _fill_by_selectors(page, inv_s["item_spec"], item.get("spec", ""), "规格")
@@ -388,14 +388,14 @@ async def issue_invoice_playwright(
                 await _fill_by_selectors(page, inv_s["item_amount"], str(item.get("amount", 0)), "金额")
                 rate_str = f"{item.get('tax_rate', 0) * 100:.0f}%"
                 await _fill_by_selectors(page, inv_s["item_tax_rate"], rate_str, "税率")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.2)
 
             await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_04_items.png"))
 
             # === Step 6: 备注 ===
             if remark:
                 await _fill_by_selectors(page, inv_s["remark"], remark, "备注")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.3)
 
             # === Step 7: 提交开票 ===
             log_info("tax_invoice", "step7_submit")
@@ -405,7 +405,8 @@ async def issue_invoice_playwright(
                 await page.screenshot(path=str(SCREENSHOT_DIR / f"error_no_submit_{rid}.png"))
                 return result
 
-            await asyncio.sleep(6)
+            try: await page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception: await asyncio.sleep(2)
 
             # === Step 8: 验证结果 ===
             screenshot_filename = f"invoice_{rid}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"

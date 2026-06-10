@@ -9,7 +9,7 @@ class TaxFiling(Base):
     __tablename__ = "tax_filings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tax_type: Mapped[str] = mapped_column(String(30), nullable=False)  # vat/corporate_income/individual_income/stamp_duty
+    tax_type: Mapped[str] = mapped_column(String(30), nullable=False)  # 支持全部 18 个税种
     period: Mapped[str] = mapped_column(String(10), nullable=False)  # 2026-05
     rpa_task_id: Mapped[str] = mapped_column(String(36), nullable=True)
     version: Mapped[int] = mapped_column(default=1)

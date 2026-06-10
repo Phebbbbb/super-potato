@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Card, Table, Tag, Button, Space, Modal, Form, Input, Select, App, Typography, Switch } from 'antd'
-import { PlusOutlined, EditOutlined, InboxOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Button, Space, Modal, Form, Input, Select, App, Typography, Switch, Avatar, Tooltip } from 'antd'
+import { PlusOutlined, EditOutlined, InboxOutlined, UserOutlined } from '@ant-design/icons'
 import { useClient } from '@/contexts/ClientContext'
 import { clientApi } from '@/services/api'
 import SkeletonTable from '@/components/SkeletonTable'
@@ -13,6 +13,7 @@ export default function Clients() {
   const [loading, setLoading] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState<any>(null)
+  const [staffList, setStaffList] = useState<any[]>([])
   const [form] = Form.useForm()
   const { message } = App.useApp()
   const { switchClient, currentClientId, loadClients } = useClient()
@@ -26,7 +27,14 @@ export default function Clients() {
     setLoading(false)
   }
 
-  useEffect(() => { fetchClients() }, [])
+  const fetchStaff = async () => {
+    try {
+      const res: any = await clientApi.availableStaff()
+      setStaffList(res || [])
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => { fetchClients(); fetchStaff() }, [])
 
   const handleSave = async () => {
     const values = await form.validateFields()
@@ -61,6 +69,12 @@ export default function Clients() {
     { title: '行业', dataIndex: 'industry', key: 'industry', width: 100 },
     { title: '联系人', dataIndex: 'contact_person', key: 'contact_person', width: 80 },
     { title: '电话', dataIndex: 'contact_phone', key: 'contact_phone', width: 120 },
+    {
+      title: '专属服务', dataIndex: 'assigned_staff_name', key: 'assigned_staff', width: 90,
+      render: (name: string, record: any) => name
+        ? <Tag icon={<UserOutlined />} color="blue">{name}</Tag>
+        : <Tag color="default">未分配</Tag>,
+    },
     {
       title: '状态', dataIndex: 'is_active', key: 'is_active', width: 70,
       render: (v: boolean) => <Tag color={v ? 'green' : 'red'}>{v ? '服务中' : '停用'}</Tag>,
@@ -128,6 +142,19 @@ export default function Clients() {
               { label: '信息技术', value: 'it' }, { label: '商务服务', value: 'business_service' },
               { label: '批发零售', value: 'retail' }, { label: '制造业', value: 'manufacturing' },
             ]} />
+          </Form.Item>
+          <Form.Item label="专属服务人员" name="assigned_staff_id" tooltip="每位客户只能分配一位服务人员">
+            <Select
+              allowClear
+              placeholder="选择服务人员（可选）"
+              options={staffList.map((s: any) => ({
+                label: `${s.display_name}（${s.role === 'admin' ? '管理员' : s.role} · 已服务 ${s.assigned_count} 户）`,
+                value: s.id,
+              }))}
+              onChange={(val) => {
+                if (!val) form.setFieldValue('assigned_staff_id', null)
+              }}
+            />
           </Form.Item>
           <Form.Item label="联系人" name="contact_person"><Input /></Form.Item>
           <Form.Item label="联系电话" name="contact_phone"><Input /></Form.Item>

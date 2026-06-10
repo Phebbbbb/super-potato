@@ -63,7 +63,7 @@ def import_statement(db: Session, bank_account_id: str, client_id: str, lines: l
 
 
 def auto_match(db: Session, bank_account_id: str) -> dict:
-    """自动匹配银行流水与记账凭证 — 多维度综合匹配（金额+日期+对方户名+摘要）"""
+    """自动匹配银行流水与记账凭证 — 金额桶索引 + 多维度综合匹配"""
     from datetime import timedelta
 
     unmatched = db.query(BankStatementLine).filter(
@@ -75,74 +75,89 @@ def auto_match(db: Session, bank_account_id: str) -> dict:
         AccountingVoucher.status == "confirmed",
     ).all()
 
+    # 构建金额桶索引 — 按 nearest-100-yuan 分桶，将 O(V*E) 降为 O(V/E)
+    # 对每条银行流水只需检查同桶及邻桶的条目
+    amt_index: dict[int, list[tuple]] = {}  # bucket -> [(voucher_id, entry_amt, entry, voucher)]
+    bucket_size = 100  # 100元一桶
+
+    for v in vouchers:
+        entries = json.loads(v.entries) if isinstance(v.entries, str) else (v.entries or [])
+        for e in entries:
+            if e.get("account_code") not in ("1002", "1001"):
+                continue
+            entry_amt = float(e.get("debit", 0) or 0) or float(e.get("credit", 0) or 0)
+            if entry_amt == 0:
+                continue
+            bucket = int(entry_amt / bucket_size)
+            amt_index.setdefault(bucket, []).append((v.id, entry_amt, e, v))
+
     matched = 0
     for line in unmatched:
         line_amount = line.debit if line.debit > 0 else line.credit
+        if line_amount <= 0:
+            continue
         best_match = None
         best_score = 0.0
 
-        for v in vouchers:
-            entries = json.loads(v.entries) if isinstance(v.entries, str) else v.entries
-            for e in entries:
-                if e.get("account_code") not in ("1002", "1001"):
-                    continue
-                entry_amt = float(e.get("debit", 0) or 0) or float(e.get("credit", 0) or 0)
-                if entry_amt == 0:
-                    continue
+        # 仅检查同桶和相邻桶（±1）的候选条目
+        line_bucket = int(line_amount / bucket_size)
+        candidates = []
+        for b in (line_bucket - 1, line_bucket, line_bucket + 1):
+            candidates.extend(amt_index.get(b, []))
 
-                score = 0.0
+        for voucher_id, entry_amt, e, v in candidates:
+            score = 0.0
 
-                # 1. 金额匹配（0-100分，金额越接近分越高）
-                amt_diff_pct = abs(float(entry_amt) - line_amount) / max(line_amount, 1)
-                if amt_diff_pct < 0.01:  # ±1%以内
-                    score += 100 - amt_diff_pct * 10
-                elif amt_diff_pct < 0.05:  # ±5%以内
-                    score += 50 - amt_diff_pct * 10
-                else:
-                    continue
+            # 1. 金额匹配（0-100分）
+            amt_diff_pct = abs(entry_amt - line_amount) / max(line_amount, 1)
+            if amt_diff_pct < 0.01:
+                score += 100 - amt_diff_pct * 10
+            elif amt_diff_pct < 0.05:
+                score += 50 - amt_diff_pct * 10
+            else:
+                continue
 
-                # 2. 日期匹配（0-20分，日期越近分越高）
-                try:
-                    line_date = line.transaction_date
-                    if isinstance(line_date, str):
-                        from datetime import date as dt_date
-                        line_date = dt_date.fromisoformat(line_date)
-                    if hasattr(v, 'voucher_date') and v.voucher_date:
-                        days_diff = abs((line_date - v.voucher_date).days)
-                        if days_diff <= 1:
-                            score += 20
-                        elif days_diff <= 3:
-                            score += 15
-                        elif days_diff <= 7:
-                            score += 5
-                except Exception:
-                    pass
-
-                # 3. 对方户名匹配（0-15分）
-                counterparty = (line.counterparty or "").strip()
-                if counterparty and len(counterparty) >= 2:
-                    entry_summary = str(e.get("summary", ""))
-                    voucher_summary = str(getattr(v, 'summary', '') or '')
-                    combined = entry_summary + voucher_summary
-                    if counterparty in combined:
+            # 2. 日期匹配（0-20分）
+            try:
+                line_date = line.transaction_date
+                if isinstance(line_date, str):
+                    from datetime import date as dt_date
+                    line_date = dt_date.fromisoformat(line_date)
+                if hasattr(v, 'voucher_date') and v.voucher_date:
+                    days_diff = abs((line_date - v.voucher_date).days)
+                    if days_diff <= 1:
+                        score += 20
+                    elif days_diff <= 3:
                         score += 15
-                    elif any(c in combined for c in counterparty[:2]):
+                    elif days_diff <= 7:
                         score += 5
+            except Exception:
+                pass
 
-                # 4. 摘要关键词匹配（0-10分）
-                line_desc = (line.description or "").lower()
-                entry_summary = str(e.get("summary", "")).lower()
-                voucher_summary = str(getattr(v, 'summary', '') or '').lower()
-                combined_text = entry_summary + " " + voucher_summary
-                common_keywords = ["货款", "服务费", "工资", "租金", "水电", "税金", "社保", "报销"]
-                keyword_hits = sum(1 for kw in common_keywords if kw in line_desc and kw in combined_text)
-                score += min(keyword_hits * 5, 10)
+            # 3. 对方户名匹配（0-15分）
+            counterparty = (line.counterparty or "").strip()
+            if counterparty and len(counterparty) >= 2:
+                entry_summary = str(e.get("summary", ""))
+                voucher_summary = str(getattr(v, 'summary', '') or '')
+                combined = entry_summary + voucher_summary
+                if counterparty in combined:
+                    score += 15
+                elif any(c in combined for c in counterparty[:2]):
+                    score += 5
 
-                if score > best_score:
-                    best_score = score
-                    best_match = (v.id, entry_amt)
+            # 4. 摘要关键词匹配（0-10分）
+            line_desc = (line.description or "").lower()
+            entry_summary = str(e.get("summary", "")).lower()
+            voucher_summary = str(getattr(v, 'summary', '') or '').lower()
+            combined_text = entry_summary + " " + voucher_summary
+            common_keywords = ["货款", "服务费", "工资", "租金", "水电", "税金", "社保", "报销"]
+            keyword_hits = sum(1 for kw in common_keywords if kw in line_desc and kw in combined_text)
+            score += min(keyword_hits * 5, 10)
 
-        # 阈值：总分 >= 70 才自动匹配
+            if score > best_score:
+                best_score = score
+                best_match = (voucher_id, entry_amt)
+
         if best_match and best_score >= 70:
             line.match_status = "auto_matched"
             line.matched_voucher_id = best_match[0]

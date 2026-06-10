@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Table, Button, Space, Modal, Form, Input, InputNumber, Select, App, Tabs, Tag, Badge } from 'antd'
+import { Card, Table, Button, Space, Modal, Form, Input, InputNumber, Select, App, Tag, Badge, Typography } from 'antd'
 import { PlusOutlined, CalculatorOutlined, CheckOutlined, InboxOutlined } from '@ant-design/icons'
 import { payrollApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
@@ -93,25 +93,26 @@ export default function Payroll() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
-        <h2>薪酬管理</h2>
+        <Typography.Title level={4} style={{ margin: 0 }}>薪酬管理</Typography.Title>
         <Space>
           <Button icon={<PlusOutlined />} onClick={() => setEmpOpen(true)}>添加员工</Button>
           <Button type="primary" icon={<CalculatorOutlined />} onClick={handleGenerateBatch}>生成工资表</Button>
         </Space>
       </div>
 
-      <Tabs items={[
-        { key: 'employees', label: '员工花名册', children:
-          loading ? <SkeletonTable rows={4} columns={5} /> :
-          employees.length === 0 ? <Card><EmptyState title="暂无员工" description="添加员工以计算薪酬" icon={<InboxOutlined style={{fontSize:64,color:'#d9d9d9'}} />} /></Card> :
-          <Card style={{ flex: 1, overflow: 'auto', minHeight: 0 }}><Table dataSource={employees} columns={empColumns} rowKey="id" pagination={false} /></Card>
-        },
-        { key: 'batches', label: '工资批次', children:
-          loading ? <SkeletonTable rows={4} columns={6} /> :
-          batches.length === 0 ? <Card><EmptyState title="暂无工资批次" description="生成第一个工资批次" icon={<InboxOutlined style={{fontSize:64,color:'#d9d9d9'}} />} /></Card> :
-          <Card style={{ flex: 1, overflow: 'auto', minHeight: 0 }}><Table dataSource={batches} columns={batchColumns} rowKey="id" pagination={false} /></Card>
-        },
-      ]} />
+      {/* 员工花名册 */}
+      <Card size="small" title="员工花名册" style={{ marginBottom: 16 }}>
+        {loading ? <SkeletonTable rows={4} columns={5} /> :
+          employees.length === 0 ? <EmptyState title="暂无员工" description="添加员工以计算薪酬" icon={<InboxOutlined style={{fontSize:64,color:'#d9d9d9'}} />} /> :
+          <Table dataSource={employees} columns={empColumns} rowKey="id" pagination={false} />}
+      </Card>
+
+      {/* 工资批次 */}
+      <Card size="small" title="工资批次">
+        {loading ? <SkeletonTable rows={4} columns={6} /> :
+          batches.length === 0 ? <EmptyState title="暂无工资批次" description="生成第一个工资批次" icon={<InboxOutlined style={{fontSize:64,color:'#d9d9d9'}} />} /> :
+          <Table dataSource={batches} columns={batchColumns} rowKey="id" pagination={false} />}
+      </Card>
 
       <Modal title="添加员工" open={empOpen} onOk={handleAddEmployee} onCancel={() => setEmpOpen(false)}>
         <Form form={empForm} layout="vertical">

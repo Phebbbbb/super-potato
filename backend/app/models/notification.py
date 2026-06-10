@@ -9,11 +9,14 @@ class Notification(Base):
 
     id = Column(String(50), primary_key=True)
     user_id = Column(String(50), nullable=True, index=True, comment="接收用户ID，NULL=全站通知")
-    type = Column(String(30), nullable=False, index=True, comment="通知类型: deadline/risk/announcement/rpa/system")
+    type = Column(String(30), nullable=False, index=True, comment="通知类型: deadline/risk/announcement/rpa/interaction/feedback")
     title = Column(String(200), nullable=False)
     message = Column(Text, nullable=True)
     is_read = Column(Boolean, default=False, index=True)
     link = Column(String(500), nullable=True, comment="点击跳转路径")
+    sender_id = Column(String(50), nullable=True, comment="发送者ID（服务端人员）")
+    sender_name = Column(String(50), nullable=True, comment="发送者显示名称")
+    client_id = Column(String(50), nullable=True, index=True, comment="关联客户ID")
     created_at = Column(DateTime, default=datetime.now)
 
     def __repr__(self):

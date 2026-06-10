@@ -6,11 +6,12 @@
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy.orm import Session
 from app.db import get_db
+from app.services.auth import get_current_user
 from app.services.precheck_engine import run_precheck, run_batch_precheck
 from app.services.tax_optimizer import run_tax_optimization
 from app.services.tax_dp_optimizer import cliff_analysis, optimize_with_scenario, optimize_multi_period
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/precheck/{client_id}")

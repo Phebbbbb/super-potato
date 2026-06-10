@@ -1,4 +1,4 @@
-"""抓取国家税务总局最新法规公告"""
+"""抓取国家税务总局 & 地方税务局最新法规公告"""
 import re
 from datetime import datetime, timedelta
 import httpx
@@ -6,17 +6,34 @@ from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 from app.models.tax_announcement import TaxAnnouncement
 
-# 国家税务总局法规公告列表页
-SOURCE_URLS = [
-    "https://www.chinatax.gov.cn/chinatax/n810341/n810755/index.html",   # 最新文件
-    "https://www.chinatax.gov.cn/chinatax/n810341/n810825/index.html",   # 政策解读
+# 公告源：国家税务总局 + 省级 + 市级
+ANNOUNCEMENT_SOURCES = [
+    {
+        "name": "国家税务总局",
+        "urls": [
+            "https://www.chinatax.gov.cn/chinatax/n810341/n810755/index.html",   # 最新文件
+            "https://www.chinatax.gov.cn/chinatax/n810341/n810825/index.html",   # 政策解读
+        ],
+    },
+    {
+        "name": "安徽税务",
+        "urls": [
+            "https://anhui.chinatax.gov.cn/col/col9422/index.html",  # 省局通知公告
+        ],
+    },
+    {
+        "name": "亳州税务",
+        "urls": [
+            "https://anhui.chinatax.gov.cn/col/col9511/index.html",  # 亳州市税务局通知公告
+        ],
+    },
 ]
 
 
-def fetch_announcements() -> list[dict]:
-    """从国家税务总局抓取最新公告"""
+def fetch_announcements_from_source(source: dict) -> list[dict]:
+    """从单个公告源抓取数据"""
     items = []
-    for base_url in SOURCE_URLS:
+    for base_url in source["urls"]:
         try:
             resp = httpx.get(base_url, timeout=15, follow_redirects=True, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -24,36 +41,38 @@ def fetch_announcements() -> list[dict]:
             resp.encoding = "utf-8"
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # 查找公告列表项（不同页面结构略有差异，先按常见选择器匹配）
-            for li in soup.select("ul li, .news-list li, .list li"):
+            # 查找公告列表项 — 兼容总局和省局不同页面结构
+            for li in soup.select("ul li, .news-list li, .list li, .list-box li, .xxgk_list li, .content-list li"):
                 link = li.select_one("a[href]")
-                date_span = li.select_one("span, .date, .time")
+                date_span = li.select_one("span, .date, .time, .sj")
                 if not link:
                     continue
 
                 title = link.get_text(strip=True)
                 href = link.get("href", "")
-                if not title or len(title) < 6:
+                if not title or len(title) < 4:
                     continue
 
                 # 补齐相对路径
                 if href.startswith("/"):
-                    href = "https://www.chinatax.gov.cn" + href
+                    # 省级站点用 anhui.chinatax.gov.cn
+                    if "anhui.chinatax.gov.cn" in base_url:
+                        href = "https://anhui.chinatax.gov.cn" + href
+                    else:
+                        href = "https://www.chinatax.gov.cn" + href
                 elif href.startswith("./"):
                     href = base_url.rsplit("/", 1)[0] + "/" + href[2:]
 
-                date_str = ""
-                if date_span:
-                    date_str = date_span.get_text(strip=True)
+                date_str = date_span.get_text(strip=True) if date_span else ""
 
                 items.append({
                     "title": title,
                     "url": href,
                     "pub_date": date_str,
-                    "source": "国家税务总局",
+                    "source": source["name"],
                 })
 
-                if len(items) >= 20:
+                if len(items) >= 15:
                     break
             if items:
                 break
@@ -61,6 +80,15 @@ def fetch_announcements() -> list[dict]:
             continue
 
     return items
+
+
+def fetch_all_announcements() -> list[dict]:
+    """从所有公告源抓取"""
+    all_items = []
+    for source in ANNOUNCEMENT_SOURCES:
+        items = fetch_announcements_from_source(source)
+        all_items.extend(items)
+    return all_items
 
 
 def parse_chinese_date(text: str):
@@ -73,10 +101,9 @@ def parse_chinese_date(text: str):
 
 
 def refresh_announcements(db: Session) -> int:
-    """抓取并存入数据库，返回新增数量"""
-    items = fetch_announcements()
+    """从所有公告源抓取并存入数据库，返回新增数量"""
+    items = fetch_all_announcements()
     if not items:
-        # 没抓到新数据，返回已有数量
         return db.query(TaxAnnouncement).count()
 
     saved = 0
@@ -108,14 +135,15 @@ def refresh_announcements(db: Session) -> int:
     return saved
 
 
-def get_latest_announcements(db: Session, limit: int = 10) -> list[dict]:
-    """获取最新公告"""
-    items = (
+def get_latest_announcements(db: Session, limit: int = 10, source: str = None) -> list[dict]:
+    """获取最新公告，可按来源筛选"""
+    q = (
         db.query(TaxAnnouncement)
         .order_by(TaxAnnouncement.pub_date_parsed.desc().nullslast(), TaxAnnouncement.created_at.desc())
-        .limit(limit)
-        .all()
     )
+    if source:
+        q = q.filter(TaxAnnouncement.source == source)
+    items = q.limit(limit).all()
     return [
         {
             "id": item.id,

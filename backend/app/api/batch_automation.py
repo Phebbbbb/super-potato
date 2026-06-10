@@ -2,11 +2,12 @@
 批量自动化 API — 并行多客户申报/开票 + 进度追踪
 """
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from app.db import SessionLocal
+from app.services.auth import get_current_user
 from app.services.automation_pool import (
     get_filing_engine, get_invoice_engine,
     ParallelFilingEngine, ParallelInvoiceEngine,
@@ -113,7 +114,7 @@ async def batch_invoice(req: BatchInvoiceRequest):
 
 
 @router.get("/job/{job_id}")
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str, _=Depends(get_current_user)):
     """查询批量任务进度"""
     filing = get_filing_engine().get_job_summary(job_id)
     if "error" not in filing:

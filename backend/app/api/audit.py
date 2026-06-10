@@ -1,4 +1,4 @@
-"""内审工作台 API — 审计日志筛选 + CSV 导出"""
+"""内审工作台 API — 审计日志筛选 + CSV 导出 + 批量智能审账"""
 import csv
 import io
 from datetime import date, datetime
@@ -9,6 +9,7 @@ from app.db import get_db
 from app.models.voucher import AccountingVoucher
 from app.models.filing import TaxFiling
 from app.models.audit_log import AuditLog
+from app.services.batch_audit_engine import run_batch_audit, AUDIT_RULES
 from sqlalchemy import func
 
 router = APIRouter()
@@ -209,3 +210,41 @@ def recent_audits(client_id: str = Query(None), limit: int = Query(50), db: Sess
             for l in logs
         ]
     }
+
+
+@router.get("/rules")
+def list_audit_rules():
+    """列出所有可用审计规则"""
+    return {
+        "rules": [
+            {"key": k, "name": v["name"], "category": v["category"],
+             "severity": v["severity"], "description": v["description"],
+             "weight": v["weight"]}
+            for k, v in AUDIT_RULES.items()
+        ]
+    }
+
+
+@router.post("/batch-audit")
+def batch_audit(
+    data: dict,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """
+    批量智能审账 — 对全部/指定客户执行多维度审计规则
+
+    body: {
+        "client_ids": ["id1", ...] | null,  // null=全部
+        "period": "2025-06",                // 可选，默认当前月
+        "rules": ["balance", ...] | null,   // null=全部规则
+        "thresholds": {"large_amount": 50000}  // 可选阈值覆盖
+    }
+    """
+    return run_batch_audit(
+        db,
+        client_ids=data.get("client_ids"),
+        period=data.get("period"),
+        rules=data.get("rules"),
+        threshold_overrides=data.get("thresholds"),
+    )

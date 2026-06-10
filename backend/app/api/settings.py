@@ -47,7 +47,7 @@ def _load_value(config_key: str, stored: str) -> dict:
 
 
 @router.get("/{config_key}")
-def get_config(config_key: str, db: Session = Depends(get_db)):
+def get_config(config_key: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     cache_key = f"settings:{config_key}"
     cached = cache_get(cache_key)
     if cached is not None:

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Card, Table, Button, Space, Modal, Form, Input, Select, Tabs, App, Tag, Statistic, Row, Col, Upload } from 'antd'
-import { PlusOutlined, UploadOutlined, ApiOutlined, LinkOutlined, ReloadOutlined, InboxOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Space, Modal, Form, Input, Select, DatePicker, App, Tag, Statistic, Row, Col, Upload } from 'antd'
+import { PlusOutlined, UploadOutlined, ApiOutlined, LinkOutlined, ReloadOutlined, InboxOutlined, FileTextOutlined } from '@ant-design/icons'
 import { bankApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
+import dayjs from 'dayjs'
 import SkeletonTable from '@/components/SkeletonTable'
 import EmptyState from '@/components/EmptyState'
 
@@ -16,6 +17,8 @@ export default function BankReconciliation() {
   const [accForm] = Form.useForm()
   const { currentClientId } = useClient()
   const { message } = App.useApp()
+  const [autoVoucherPeriod, setAutoVoucherPeriod] = useState(dayjs().format('YYYY-MM'))
+  const [autoVoucherLoading, setAutoVoucherLoading] = useState(false)
 
   const fetchData = async () => {
     if (!currentClientId) return
@@ -70,6 +73,17 @@ export default function BankReconciliation() {
     } catch { message.error('匹配失败') }
   }
 
+  const handleAutoGenerateVouchers = async () => {
+    if (!selectedAccount) { message.warning('请先选择银行账户'); return }
+    setAutoVoucherLoading(true)
+    try {
+      const res: any = await bankApi.autoGenerateVouchers(selectedAccount, autoVoucherPeriod)
+      message.success(res.message || `已生成 ${res.vouchers_created} 张凭证`)
+      loadStatements(selectedAccount)
+    } catch { message.error('生成凭证失败') }
+    setAutoVoucherLoading(false)
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
@@ -95,6 +109,8 @@ export default function BankReconciliation() {
           <Space>
             <Upload beforeUpload={handleImport} showUploadList={false}><Button icon={<UploadOutlined />}>导入CSV</Button></Upload>
             <Button icon={<ApiOutlined />} onClick={handleAutoMatch}>自动匹配</Button>
+            <DatePicker picker="month" value={dayjs(autoVoucherPeriod, 'YYYY-MM')} onChange={(d) => d && setAutoVoucherPeriod(d.format('YYYY-MM'))} style={{ width: 120 }} size="small" />
+            <Button icon={<FileTextOutlined />} loading={autoVoucherLoading} onClick={handleAutoGenerateVouchers}>生成凭证</Button>
             <Button icon={<ReloadOutlined />} onClick={() => loadStatements(selectedAccount)}>刷新</Button>
           </Space>
         }>

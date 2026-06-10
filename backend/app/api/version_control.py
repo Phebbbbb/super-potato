@@ -11,14 +11,14 @@ router = APIRouter()
 
 
 @router.get("/history/{target_type}/{target_id}")
-def get_history(target_type: str, target_id: str, db: Session = Depends(get_db)):
+def get_history(target_type: str, target_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     """查看某个实体的完整变更历史（git log）"""
     result = history(db, target_type, target_id)
     return api_success(data={"items": result, "total": len(result)})
 
 
 @router.get("/diff/{target_type}/{target_id}")
-def get_diff(target_type: str, target_id: str, db: Session = Depends(get_db)):
+def get_diff(target_type: str, target_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     """对比某个实体的最新版本与上一版本（git diff）"""
     result = diff(db, target_type, target_id)
     return api_success(data=result)
@@ -42,7 +42,7 @@ def revert_entity(
 
 
 @router.get("/recent")
-def get_recent_activity(limit: int = Query(50, le=200), db: Session = Depends(get_db)):
+def get_recent_activity(limit: int = Query(50, le=200), db: Session = Depends(get_db), _=Depends(get_current_user)):
     """最近的变更活动"""
     result = recent_activity(db, limit=limit)
     return api_success(data={"items": result, "total": len(result)})

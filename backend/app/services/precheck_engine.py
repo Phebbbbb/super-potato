@@ -62,12 +62,12 @@ def run_precheck(db: Session, client_id: str, period: str = None) -> dict:
     score = 100  # 满分起始，逐项扣分
 
     # ================================================================
-    # L1: 数据完整性检查
+    # L1: 数据完整性检查（单次加载凭证明细 + 凭证列表）
     # ================================================================
 
     # 1.1 客户基础信息
     missing_fields = []
-    if not client.unified_social_credit_code:
+    if not client.tax_no:
         missing_fields.append("统一社会信用代码")
     if not client.taxpayer_type:
         missing_fields.append("纳税人类型")
@@ -77,21 +77,7 @@ def run_precheck(db: Session, client_id: str, period: str = None) -> dict:
     else:
         checks.append({"check": "客户基础信息", "status": "pass", "detail": "完整"})
 
-    # 1.2 本月是否有已确认凭证
-    voucher_count = db.query(AccountingVoucher).filter(
-        AccountingVoucher.client_id == client_id,
-        AccountingVoucher.status == "confirmed",
-        AccountingVoucher.voucher_date >= ms,
-        AccountingVoucher.voucher_date <= me,
-    ).count()
-
-    if voucher_count == 0:
-        warnings.append({"check": "本月凭证", "detail": "本月无已确认凭证，申报数据可能为空", "severity": "warning"})
-        score -= 15
-    else:
-        checks.append({"check": "本月凭证", "status": "pass", "detail": f"{voucher_count} 张已确认"})
-
-    # 1.3 凭证借贷平衡
+    # 一次性加载所有本月已确认凭证 + 分录明细
     vouchers = db.query(AccountingVoucher).filter(
         AccountingVoucher.client_id == client_id,
         AccountingVoucher.status == "confirmed",
@@ -99,6 +85,15 @@ def run_precheck(db: Session, client_id: str, period: str = None) -> dict:
         AccountingVoucher.voucher_date <= me,
     ).all()
 
+    # 1.2 本月凭证数量
+    voucher_count = len(vouchers)
+    if voucher_count == 0:
+        warnings.append({"check": "本月凭证", "detail": "本月无已确认凭证，申报数据可能为空", "severity": "warning"})
+        score -= 15
+    else:
+        checks.append({"check": "本月凭证", "status": "pass", "detail": f"{voucher_count} 张已确认"})
+
+    # 1.3 凭证借贷平衡
     unbalanced = []
     for v in vouchers:
         if v.total_debit is not None and v.total_credit is not None:
@@ -110,9 +105,21 @@ def run_precheck(db: Session, client_id: str, period: str = None) -> dict:
     else:
         checks.append({"check": "借贷平衡", "status": "pass", "detail": "全部凭证借贷平衡"})
 
-    # 1.4 票账一致性
-    entries = get_confirmed_entries(db, ms, me)
-    entries = [e for e in entries if e.get("client_id") == client_id]
+    # 1.4 票账一致性 — 复用已加载的 vouchers 解析分录（不再单独查询）
+    entries = []
+    for v in vouchers:
+        try:
+            v_entries = json.loads(v.entries) if isinstance(v.entries, str) else (v.entries or [])
+        except (json.JSONDecodeError, TypeError):
+            v_entries = []
+        for e in v_entries:
+            entries.append({
+                "account_code": e.get("account_code", ""),
+                "debit": float(e.get("debit", 0) or 0),
+                "credit": float(e.get("credit", 0) or 0),
+                "summary": e.get("summary", ""),
+                "client_id": client_id,
+            })
 
     revenue_from_vouchers = _sum_by_account(entries, ["6001", "6051"], "credit")
     expense_from_vouchers = _sum_by_account(entries, ["6401", "6402", "6403", "6601", "6602", "6603"], "debit")

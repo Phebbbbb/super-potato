@@ -1,16 +1,27 @@
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db import get_db
 from app.services.report_service import dashboard_data, trial_balance, income_statement, balance_sheet, cash_flow_statement
 from app.services.qr_service import create_trace
 from app.services.cache import cache_get, cache_set
+from app.services.auth import get_current_user
 
 router = APIRouter()
 
 
+class GenerateReportRequest(BaseModel):
+    report_type: str                                 # balance_sheet / income_statement / tax_report / voucher / monthly
+    client_name: str = ""
+    period: str = ""
+    voucher_id: str = ""                             # 凭证打印时使用
+    tax_data: dict = {}                              # 纳税申报表数据
+    monthly_summary: dict = {}                       # 月度报告数据
+
+
 @router.get("/automation-rate")
-def automation_rate(db: Session = Depends(get_db)):
+def automation_rate(db: Session = Depends(get_db), _=Depends(get_current_user)):
     """自动化率分析 — 衡量系统全自动处理比例（核心差异化指标）"""
     from app.models.document import OriginalDocument
     from app.models.voucher import AccountingVoucher
@@ -95,7 +106,7 @@ def automation_rate(db: Session = Depends(get_db)):
 
 
 @router.get("/dashboard")
-def dashboard(client_id: str = Query(None), db: Session = Depends(get_db)):
+def dashboard(client_id: str = Query(None), db: Session = Depends(get_db), _=Depends(get_current_user)):
     """首页仪表盘数据 — 对标亿企赢 KPI 驾驶舱"""
     cache_key = f"reports:dashboard:{client_id or 'all'}"
     cached = cache_get(cache_key)
@@ -112,6 +123,7 @@ def general_ledger(
     end_date: str = Query(...),
     account_code: str = None,
     db: Session = Depends(get_db),
+    _=Depends(get_current_user),
 ):
     """总账 — 按日期列出所有分录"""
     from app.services.report_service import get_confirmed_entries
@@ -133,7 +145,7 @@ def general_ledger(
 
 
 @router.get("/trial-balance")
-def get_trial_balance(period: str = Query(...), db: Session = Depends(get_db)):
+def get_trial_balance(period: str = Query(...), db: Session = Depends(get_db), _=Depends(get_current_user)):
     """科目余额表"""
     items = trial_balance(db, period)
     return {
@@ -144,7 +156,7 @@ def get_trial_balance(period: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.get("/income-statement")
-def get_income_statement(period: str = Query(...), db: Session = Depends(get_db)):
+def get_income_statement(period: str = Query(...), db: Session = Depends(get_db), _=Depends(get_current_user)):
     """利润表"""
     items = income_statement(db, period)
     return {
@@ -154,7 +166,7 @@ def get_income_statement(period: str = Query(...), db: Session = Depends(get_db)
 
 
 @router.get("/balance-sheet")
-def get_balance_sheet(period: str = Query(...), db: Session = Depends(get_db)):
+def get_balance_sheet(period: str = Query(...), db: Session = Depends(get_db), _=Depends(get_current_user)):
     """资产负债表"""
     bs = balance_sheet(db, period)
     return {
@@ -164,7 +176,7 @@ def get_balance_sheet(period: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.get("/cash-flow")
-def get_cash_flow(period: str = Query(...), db: Session = Depends(get_db)):
+def get_cash_flow(period: str = Query(...), db: Session = Depends(get_db), _=Depends(get_current_user)):
     """现金流量表"""
     sections = cash_flow_statement(db, period)
     return {
@@ -174,7 +186,7 @@ def get_cash_flow(period: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.get("/export")
-def export_report(report_type: str, period: str, db: Session = Depends(get_db)):
+def export_report(report_type: str, period: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     """导出报表（返回 JSON 数据，前端可进一步处理为 Excel）"""
     if report_type == "trial-balance":
         data = trial_balance(db, period)
@@ -194,3 +206,71 @@ def export_report(report_type: str, period: str, db: Session = Depends(get_db)):
         "data": data,
         "message": "数据已准备好，可在前端导出为 Excel",
     }
+
+
+# ===== PDF / HTML 报表生成 =====
+
+@router.post("/generate")
+def generate_report(body: GenerateReportRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """生成财务报表 (HTML格式，可直接打印为PDF)"""
+    from app.services.report_generator import (
+        generate_balance_sheet, generate_income_statement,
+        generate_tax_report, generate_voucher_print, generate_monthly_report,
+    )
+
+    if body.report_type == "voucher" and body.voucher_id:
+        from app.models.voucher import AccountingVoucher
+        import json as _json
+        v = db.query(AccountingVoucher).filter(AccountingVoucher.id == body.voucher_id).first()
+        if not v:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="凭证不存在")
+        voucher_dict = {
+            "voucher_no": v.voucher_no, "voucher_date": v.voucher_date.isoformat() if v.voucher_date else "",
+            "summary": v.summary, "entries": _json.loads(v.entries) if v.entries else [],
+            "maker": v.maker, "reviewer": v.reviewer, "bookkeeper": v.bookkeeper,
+            "status": v.status, "qr_code_path": v.qr_code_path or "",
+            "total_debit": v.total_debit, "total_credit": v.total_credit,
+        }
+        result = generate_voucher_print(voucher_dict)
+
+    elif body.report_type == "balance_sheet":
+        entries = _get_report_entries(db, body.period)
+        result = generate_balance_sheet(entries, body.client_name, body.period)
+
+    elif body.report_type == "income_statement":
+        entries = _get_report_entries(db, body.period)
+        result = generate_income_statement(entries, body.client_name, body.period)
+
+    elif body.report_type == "tax_report":
+        result = generate_tax_report(body.client_name, body.period, body.tax_data)
+
+    elif body.report_type == "monthly":
+        result = generate_monthly_report(body.client_name, body.period, body.monthly_summary)
+
+    else:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"不支持的报表类型: {body.report_type}")
+
+    return {
+        "filename": result.filename,
+        "path": result.path,
+        "report_type": result.report_type,
+        "generated_at": result.generated_at,
+        "message": "报表已生成",
+    }
+
+
+def _get_report_entries(db: Session, period: str = "") -> list[dict]:
+    """获取报表所需的凭证分录"""
+    from app.models.voucher import AccountingVoucher
+    import json as _json
+    q = db.query(AccountingVoucher).filter(AccountingVoucher.status == "confirmed")
+    if period:
+        q = q.filter(AccountingVoucher.voucher_date >= f"{period}-01")
+    vouchers = q.order_by(AccountingVoucher.voucher_date.desc()).limit(500).all()
+    entries = []
+    for v in vouchers:
+        v_entries = _json.loads(v.entries) if v.entries else []
+        entries.extend(v_entries)
+    return entries

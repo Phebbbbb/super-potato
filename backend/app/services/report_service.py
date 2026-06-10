@@ -17,17 +17,19 @@ def get_account_map(db: Session) -> dict[str, dict]:
     }
 
 
-def get_confirmed_entries(db: Session, start_date: str, end_date: str) -> list[dict]:
-    """获取已确认凭证的所有分录（指定日期范围）"""
-    vouchers = (
+def get_confirmed_entries(db: Session, start_date: str, end_date: str, client_id: str = None) -> list[dict]:
+    """获取已确认凭证的所有分录（指定日期范围，可选按 client_id 过滤）"""
+    q = (
         db.query(AccountingVoucher)
         .filter(
             AccountingVoucher.status == "confirmed",
             AccountingVoucher.voucher_date >= start_date,
             AccountingVoucher.voucher_date <= end_date,
         )
-        .all()
     )
+    if client_id:
+        q = q.filter(AccountingVoucher.client_id == client_id)
+    vouchers = q.all()
 
     entries = []
     for v in vouchers:
@@ -353,7 +355,10 @@ def cash_flow_statement(db: Session, period: str) -> list[dict]:
 
 
 def _month_range(year: int, month: int):
-    """返回某月的起止日期字符串"""
+    """返回某月的起止日期字符串。自动处理跨年（month <= 0 时回退到上一年）。"""
+    while month <= 0:
+        month += 12
+        year -= 1
     start = f"{year}-{month:02d}-01"
     if month == 12:
         end = f"{year}-12-31"
@@ -390,9 +395,7 @@ def dashboard_data(db: Session, client_id: str = None) -> dict:
         filing_filter.append(TaxFiling.client_id == client_id)
 
     # === 本月核心指标 ===
-    entries = get_confirmed_entries(db, month_start, month_end)
-    if client_id:
-        entries = [e for e in entries if e.get("client_id") == client_id]
+    entries = get_confirmed_entries(db, month_start, month_end, client_id=client_id)
 
     revenue = _sum_by_account(entries, ["6001", "6051"], "credit")  # 主营业务收入 + 其他业务收入
     cost = _sum_by_account(entries, ["6401", "6402", "6403"], "debit")  # 主营业务成本

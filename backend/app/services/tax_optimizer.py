@@ -92,8 +92,7 @@ def run_tax_optimization(db: Session, client_id: str, period: str = None) -> dic
     year_start = dt_date(y, 1, 1)
     year_end = dt_date(y, 12, 31)
 
-    entries = get_confirmed_entries(db, str(year_start), str(year_end))
-    entries = [e for e in entries if e.get("client_id") == client_id]
+    entries = get_confirmed_entries(db, str(year_start), str(year_end), client_id=client_id)
 
     ytd_revenue = _sum_by_account(entries, ["6001", "6051"], "credit")
     ytd_cost = _sum_by_account(entries, ["6401", "6402", "6403"], "debit")
@@ -373,21 +372,37 @@ def _search_scenarios(
 
 
 def _compute_seasonal_factor(db: Session, client_id: str, year: int, current_month: int) -> dict:
-    """计算季节性因子 — 基于历史数据"""
+    """计算季节性因子 — 基于历史数据（单次查询全年12个月 + 缓存）"""
     from app.services.report_service import get_confirmed_entries, _sum_by_account, _month_range
+    from app.services.cache import cache_get, cache_set
+
+    cache_key = f"seasonal:{client_id}:{year}:{current_month}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     factors = {"revenue": 1.0, "expense": 1.0}
 
-    # 检查过去两年同期的数据
     for check_year in [year - 1, year - 2]:
         year_total_revenue = 0
         remainder_revenue = 0
         year_total_expenses = 0
         remainder_expenses = 0
 
+        # 单次加载全年12个月数据，按月份分组
+        y_start, _ = _month_range(check_year, 1)
+        _, y_end = _month_range(check_year, 12)
+        all_year_entries = get_confirmed_entries(db, str(y_start), str(y_end))
+        by_month = {}
+        for e in all_year_entries:
+            if e.get("client_id") != client_id:
+                continue
+            vd = e.get("voucher_date", "")
+            mth_key = int(vd[5:7]) if vd and len(vd) >= 7 else 0
+            by_month.setdefault(mth_key, []).append(e)
+
         for mth in range(1, 13):
-            ms, me = _month_range(check_year, mth)
-            month_entries = get_confirmed_entries(db, str(ms), str(me))
-            month_entries = [e for e in month_entries if e.get("client_id") == client_id]
+            month_entries = by_month.get(mth, [])
             m_rev = _sum_by_account(month_entries, ["6001", "6051"], "credit")
             m_exp = _sum_by_account(month_entries, ["6401", "6402", "6403", "6601", "6602", "6603"], "debit")
 
@@ -409,6 +424,8 @@ def _compute_seasonal_factor(db: Session, client_id: str, year: int, current_mon
         if factors["revenue"] != 1.0:
             break
 
+    # 缓存 1 天（季节性因子变化缓慢）
+    cache_set(cache_key, factors, ttl=86400)
     return factors
 
 
@@ -418,8 +435,7 @@ def _vat_optimization(db: Session, client_id: str, year: int, month: int) -> dic
     from app.models.document import OriginalDocument
 
     ms, me = _month_range(year, month)
-    entries = get_confirmed_entries(db, str(ms), str(me))
-    entries = [e for e in entries if e.get("client_id") == client_id]
+    entries = get_confirmed_entries(db, str(ms), str(me), client_id=client_id)
 
     input_vat = _sum_by_account(entries, ["2221002"], "debit")
     output_vat = _sum_by_account(entries, ["2221001"], "credit")

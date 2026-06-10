@@ -8,11 +8,22 @@
   → ⑧ 生成财务报表 → ⑨ 返回完整摘要
 """
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from sqlalchemy.orm import Session
 from app.db import get_db
+from app.services.period_close_risk import run_close_risk_check
 
 router = APIRouter()
+
+
+@router.get("/period-close/risk-check/{client_id}")
+def check_close_risk(
+    client_id: str,
+    period: str = Query(None),
+    db: Session = Depends(get_db),
+):
+    """结账前风险检测 — 20项检查"""
+    return run_close_risk_check(db, client_id, period)
 
 
 @router.post("/period-close")

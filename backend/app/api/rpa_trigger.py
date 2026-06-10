@@ -15,7 +15,7 @@ from app.services.ai_service import ai_generate_voucher
 from app.services.qr_service import create_trace
 from app.services.tax_service import preview_filing
 from app.services.tax_automation import TaxAutomationEngine
-from app.services.auth import require_modify, get_current_user
+from app.services.auth import require_modify, require_not_client, get_current_user
 from app.models.user import User
 from app.models.invoice import Invoice
 from app.models.client import Client
@@ -101,7 +101,7 @@ async def create_and_trigger(data: dict, db: Session = Depends(get_db), _=Depend
 
 
 @router.post("/test-webhook")
-async def test_webhook(data: dict):
+async def test_webhook(data: dict, user=Depends(get_current_user)):
     """测试 RPA Webhook 连通性"""
     webhook_url = data.get("webhook_url", "")
     api_key = data.get("api_key", "")

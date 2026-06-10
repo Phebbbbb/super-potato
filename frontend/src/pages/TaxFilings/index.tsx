@@ -7,13 +7,30 @@ import {
 } from '@ant-design/icons'
 import { filingApi, feedbackApi, taxAutoApi } from '@/services/api'
 import { useClient } from '@/contexts/ClientContext'
+import { useRole } from '@/hooks/useRole'
 import SkeletonTable from '@/components/SkeletonTable'
 import EmptyState from '@/components/EmptyState'
 
 const { Text, Title } = Typography
 
 const TAX_TYPE_MAP: Record<string, string> = {
-  vat: '增值税', corporate_income: '企业所得税', individual_income: '个人所得税', stamp_duty: '印花税', surtax: '附加税',
+  vat: '增值税',
+  consumption_tax: '消费税',
+  corporate_income: '企业所得税',
+  individual_income: '个人所得税',
+  surtax: '附加税（城建+教育费+地方教育费）',
+  stamp_duty: '印花税',
+  property_tax: '房产税',
+  land_use_tax: '城镇土地使用税',
+  land_appreciation_tax: '土地增值税',
+  deed_tax: '契税',
+  vehicle_vessel_tax: '车船税',
+  vehicle_purchase_tax: '车辆购置税',
+  resource_tax: '资源税',
+  environmental_tax: '环境保护税',
+  farmland_occupation_tax: '耕地占用税',
+  tobacco_tax: '烟叶税',
+  customs_duty: '关税',
 }
 
 export default function TaxFilings() {
@@ -33,6 +50,7 @@ export default function TaxFilings() {
   const [reviewForm] = Form.useForm()
   const navigate = useNavigate()
   const { currentClientId } = useClient()
+  const { isClient } = useRole()
   const { message } = App.useApp()
 
   const fetchFilings = async () => {
@@ -262,7 +280,7 @@ export default function TaxFilings() {
         <Space>
           <Button type="link" size="small" icon={<FileSearchOutlined />}
             onClick={() => { setSelected(record); setDetailOpen(true) }}>详情</Button>
-          {(record.status === 'pending' || record.status === 'pending_review') && (
+          {!isClient && (record.status === 'pending' || record.status === 'pending_review') && (
             <>
               <Button type="link" size="small" icon={<AuditOutlined />}
                 onClick={() => { setSelected(record); reviewForm.setFieldsValue({ action: 'approve' }); setReviewOpen(true) }}>审核</Button>
@@ -271,6 +289,7 @@ export default function TaxFilings() {
             </>
           )}
           <Button type="link" size="small" onClick={() => showAudit(record)}>日志</Button>
+          {!isClient && (
           <Button type="link" size="small" danger icon={<DeleteOutlined />}
             onClick={() => {
               Modal.confirm({
@@ -282,6 +301,7 @@ export default function TaxFilings() {
                 },
               })
             }} />
+          )}
         </Space>
       ),
     },
@@ -291,9 +311,11 @@ export default function TaxFilings() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <h2>纳税申报</h2>
+        {!isClient && (
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setStep(0); setPreviewData(null); createForm.resetFields(); setCreateOpen(true) }}>
           创建申报
         </Button>
+        )}
       </div>
 
       {loading ? (
@@ -337,10 +359,24 @@ export default function TaxFilings() {
             <Row gutter={16}>
               <Col span={12}>
                 <Form.Item label="税种" name="tax_type" rules={[{ required: true }]}>
-                  <Select options={[
+                  <Select showSearch options={[
                     { label: '增值税', value: 'vat' },
+                    { label: '消费税', value: 'consumption_tax' },
                     { label: '企业所得税', value: 'corporate_income' },
-                    { label: '附加税', value: 'surtax' },
+                    { label: '个人所得税', value: 'individual_income' },
+                    { label: '附加税（城建+教育费+地方教育费）', value: 'surtax' },
+                    { label: '印花税', value: 'stamp_duty' },
+                    { label: '房产税', value: 'property_tax' },
+                    { label: '城镇土地使用税', value: 'land_use_tax' },
+                    { label: '土地增值税', value: 'land_appreciation_tax' },
+                    { label: '契税', value: 'deed_tax' },
+                    { label: '车船税', value: 'vehicle_vessel_tax' },
+                    { label: '车辆购置税', value: 'vehicle_purchase_tax' },
+                    { label: '资源税', value: 'resource_tax' },
+                    { label: '环境保护税', value: 'environmental_tax' },
+                    { label: '耕地占用税', value: 'farmland_occupation_tax' },
+                    { label: '烟叶税', value: 'tobacco_tax' },
+                    { label: '关税', value: 'customs_duty' },
                   ]} />
                 </Form.Item>
               </Col>

@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.invoice import Invoice
 from app.models.user import User
-from app.services.auth import require_modify, get_current_user, check_client_access
+from app.services.auth import require_modify, require_not_client, get_current_user, check_client_access
 from app.services.tax_invoice import issue_invoice_playwright
 from app.services.qr_service import create_trace
 from app.services.version_control import commit
+from app.services.invoice_risk import comprehensive_risk_check
 from app.schemas.core import InvoiceCreate
 
 router = APIRouter()
@@ -129,6 +130,26 @@ async def issue_invoice(
     if invoice.status == "issued":
         raise HTTPException(status_code=400, detail="该发票已开具")
 
+    # 风险评估
+    inv_data = {
+        "buyer_tax_no": invoice.buyer_tax_no,
+        "buyer_name": invoice.buyer_name,
+        "buyer_address": invoice.buyer_address,
+        "buyer_bank": invoice.buyer_bank,
+        "grand_total": invoice.grand_total,
+        "items": json.loads(invoice.items) if invoice.items else [],
+    }
+    risk = comprehensive_risk_check(db, inv_data, invoice.client_id)
+    if risk["require_review"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "RISK_BLOCKED",
+                "message": f"风险评估未通过（{risk['risk_level']}），请先处理风险项",
+                "risk": risk,
+            },
+        )
+
     from app.api.settings import get_tax_credentials
     tax_credentials = get_tax_credentials(db)
 
@@ -172,6 +193,18 @@ async def issue_invoice(
         invoice.status = "failed"
         db.commit()
         raise HTTPException(status_code=500, detail=f"开票引擎异常: {str(e)[:200]}")
+
+
+@router.post("/risk-check")
+def precheck_invoice_risk(
+    data: dict,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+    _=Depends(require_not_client),
+):
+    """开票前风险预检 — 算法驱动多维度评估"""
+    risk = comprehensive_risk_check(db, data, data.get("client_id", ""))
+    return risk
 
 
 @router.get("/{invoice_id}")

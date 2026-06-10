@@ -21,7 +21,9 @@ class AccountingVoucher(Base):
     client_id: Mapped[str] = mapped_column(String(36), nullable=True, index=True)
     version: Mapped[int] = mapped_column(default=1)
     created_by: Mapped[str] = mapped_column(String(20), nullable=False, default="ai")  # ai / manual
+    maker: Mapped[str] = mapped_column(String(50), nullable=True)  # 制单人（必须与审核人不同）
     reviewer: Mapped[str] = mapped_column(String(50), nullable=True)  # 审核人
+    bookkeeper: Mapped[str] = mapped_column(String(50), nullable=True)  # 记账人
     reviewed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)  # 审核时间
     review_comment: Mapped[str] = mapped_column(Text, nullable=True)  # 审核意见
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

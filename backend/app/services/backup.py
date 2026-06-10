@@ -26,12 +26,14 @@ def backup_database() -> dict:
             # PostgreSQL: pg_dump
             backup_file = backup_dir / f"smart_tax_{ts}.sql"
             db_url = settings.database_url
-            # 解析 postgresql://user:pass@host/db
+            # 解析 postgresql://user:pass@host:port/db
             url_part = db_url.replace("postgresql://", "")
             user_pass, host_db = url_part.split("@")
             user, pwd = user_pass.split(":") if ":" in user_pass else (user_pass, "")
             host_port, db_name = host_db.split("/")
-            host = host_port.split(":")[0]
+            parts = host_port.split(":")
+            host = parts[0]
+            port = parts[1] if len(parts) > 1 else None
 
             env = os.environ.copy()
             if pwd:
@@ -40,6 +42,9 @@ def backup_database() -> dict:
                 "pg_dump", "-h", host, "-U", user, "-d", db_name,
                 "-f", str(backup_file), "--no-owner", "--no-acl",
             ]
+            if port:
+                cmd.insert(cmd.index("-U") + 2, "-p")
+                cmd.insert(cmd.index("-U") + 3, port)
             result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
             if result.returncode != 0:
                 return {"success": False, "error": result.stderr[:200]}
@@ -79,11 +84,16 @@ def restore_database(backup_file: str) -> dict:
             user_pass, host_db = url_part.split("@")
             user, pwd = user_pass.split(":") if ":" in user_pass else (user_pass, "")
             host_port, db_name = host_db.split("/")
-            host = host_port.split(":")[0]
+            parts = host_port.split(":")
+            host = parts[0]
+            port = parts[1] if len(parts) > 1 else None
             env = os.environ.copy()
             if pwd:
                 env["PGPASSWORD"] = pwd
             cmd = ["psql", "-h", host, "-U", user, "-d", db_name, "-f", str(backup_path)]
+            if port:
+                cmd.insert(cmd.index("-U") + 2, "-p")
+                cmd.insert(cmd.index("-U") + 3, port)
             result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
             if result.returncode != 0:
                 return {"success": False, "error": result.stderr[:200]}

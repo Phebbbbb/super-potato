@@ -16,6 +16,7 @@ class Client(Base):
     address: Mapped[str] = mapped_column(String(255), nullable=True)
     contact_person: Mapped[str] = mapped_column(String(50), nullable=True, comment="联系人")
     contact_phone: Mapped[str] = mapped_column(String(20), nullable=True)
+    assigned_staff_id: Mapped[str] = mapped_column(String(36), nullable=True, index=True, comment="专属服务人员ID，一对一归属")
     service_start: Mapped[datetime] = mapped_column(DateTime, nullable=True, comment="服务起始日")
     service_end: Mapped[datetime] = mapped_column(DateTime, nullable=True, comment="合同到期日")
     remark: Mapped[str] = mapped_column(Text, nullable=True)

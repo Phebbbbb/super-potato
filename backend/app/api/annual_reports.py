@@ -5,6 +5,7 @@ from sqlalchemy import func
 from datetime import date as dt_date
 from app.db import get_db
 from app.models.annual_report import AnnualReport
+from app.services.auth import get_current_user, require_modify
 from app.services.version_control import commit as vc_commit
 
 router = APIRouter()
@@ -50,7 +51,7 @@ def list_reports(
 
 
 @router.get("/{report_id}")
-def get_report(report_id: str, db: Session = Depends(get_db)):
+def get_report(report_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     """获取单个年报详情"""
     r = db.query(AnnualReport).filter(AnnualReport.id == report_id).first()
     if not r:
@@ -173,7 +174,7 @@ def update_report(report_id: str, data: dict, db: Session = Depends(get_db)):
 
 
 @router.delete("/{report_id}")
-def delete_report(report_id: str, db: Session = Depends(get_db)):
+def delete_report(report_id: str, db: Session = Depends(get_db), _=Depends(require_modify)):
     """删除工商年报"""
     r = db.query(AnnualReport).filter(AnnualReport.id == report_id).first()
     if not r:

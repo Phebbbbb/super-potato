@@ -436,6 +436,113 @@ TAX_BUREAU_CONFIGS = {
     },
 }
 
+# ===== 新增税种选择器（通用，合并到所有省级 Profile） =====
+_NEW_TAX_SELECTORS = {
+    "consumption_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=消费税申报",
+        "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="计税"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="消费税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "individual_income": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=个人所得税申报, text=个税申报, text=个人所得税扣缴",
+        "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="应纳税所得额"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="个税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "land_appreciation_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=土地增值税申报, text=土增税申报",
+        "input_taxable_amount": '#transferIncome, input[name*="transferIncome"], input[placeholder*="转让收入"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="土地增值税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "deed_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=契税申报",
+        "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="成交价格"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="契税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "vehicle_vessel_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=车船税申报",
+        "input_taxable_amount": '#vehicleCount, input[name*="vehicleCount"], input[placeholder*="车辆"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="车船税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "vehicle_purchase_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=车辆购置税申报",
+        "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="计税价格"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="车辆购置税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "resource_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=资源税申报",
+        "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="销售额"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="资源税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "environmental_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=环境保护税申报, text=环保税申报",
+        "input_pollution_equivalent": '#pollutionEquiv, input[name*="pollution"], input[placeholder*="当量"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="环保税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "farmland_occupation_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=耕地占用税申报",
+        "input_land_area": '#landArea, input[name*="landArea"], input[placeholder*="面积"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="耕地占用税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "tobacco_tax": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=烟叶税申报",
+        "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="收购金额"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="烟叶税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+    "customs_duty": {
+        "menu_declare": "text=我要办税, text=税费申报",
+        "menu_item": "text=关税申报",
+        "input_taxable_amount": '#taxableAmount, input[name*="taxableAmount"], input[placeholder*="完税价格"]',
+        "input_tax_payable": '#taxPayable, input[name*="tax"], input[placeholder*="关税"]',
+        "btn_submit": 'text=申报, button:has-text("申报"), button:has-text("提交")',
+        "btn_confirm": 'text=确认, button:has-text("确认"), button:has-text("确定")',
+        "success_indicator": 'text=申报成功, text=提交成功',
+    },
+}
+
+# 合并到所有省份配置
+for _profile_name, _profile_config in TAX_PROFILES.items():
+    if "filing_selectors" in _profile_config:
+        _profile_config["filing_selectors"].update(_NEW_TAX_SELECTORS)
 
 @dataclass
 class FilingResult:
@@ -677,7 +784,7 @@ class TaxAutomationEngine:
                 if not filing_s:
                     return FilingResult(
                         success=False,
-                        message=f"不支持的税种: {tax_type}，当前只支持 vat / corporate_income / surtax",
+                        message=f"该税种暂不支持自动申报: {tax_type}，请选择手动申报或等待功能更新",
                         steps_completed=steps_completed, failed_step="resolve_config",
                     )
 
@@ -757,6 +864,14 @@ class TaxAutomationEngine:
                         str(tax_data.get("tax_payable", 0)), "应纳税额"
                     )
 
+                else:
+                    # 通用填报：按 tax_data 中的字段自动填充
+                    for key, val in tax_data.items():
+                        if key in ("tax_type", "period", "message", "note"):
+                            continue
+                        selector = filing_s.get(f"input_{key}", f"#{key}")
+                        await self._safe_fill(page, selector, str(val), key)
+
                 await self._screenshot(page, "filing_filled")
                 screenshots.append(str(self.screenshot_dir / f"{self.run_id}_filing_filled.png"))
 
@@ -810,6 +925,184 @@ class TaxAutomationEngine:
                 await browser.close()
 
         print(f"[自动申报] 完成: {result.message}")
+        return result
+
+
+    async def run_filing_with_checkpoints(
+        self,
+        tax_type: str,
+        period: str,
+        tax_data: dict,
+        credentials: dict,
+    ) -> FilingResult:
+        """
+        带检查点恢复的申报执行 — 每个步骤自动保存检查点，失败时从断点恢复
+
+        与 run_filing 的区别：
+          - 每个步骤执行前保存检查点（URL + cookies + screenshot）
+          - 步骤失败时自动从上一个检查点恢复，而非从头重试
+          - 幂等步骤（fill_form, submit）可安全重试
+          - 非幂等步骤失败时跳过，继续后续步骤
+        """
+        from app.services.automation_checkpoint import (
+            CheckpointEngine, AutomationStep, AutomationRun, get_checkpoint_engine,
+        )
+
+        self.run_id = uuid.uuid4().hex[:12]
+        screenshots = []
+        steps_completed = []
+        failed_step = ""
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return FilingResult(
+                success=False,
+                message="未安装 Playwright。请运行: pip install playwright && playwright install chromium",
+            )
+
+        login_url = self.config["login_url"]
+        if not login_url:
+            return FilingResult(
+                success=False,
+                message=f"省份配置 [{self.profile}] 未设置 login_url",
+            )
+
+        checkpoint_engine = get_checkpoint_engine()
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=self.headless)
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080}, locale="zh-CN",
+            )
+            page = await context.new_page()
+
+            try:
+                # 定义步骤（含幂等性标记）
+                login_s = self.config["login_selectors"]
+                filing_configs = self.config.get("filing_selectors", {})
+                filing_s = filing_configs.get(tax_type, filing_configs.get("vat", {}))
+
+                # 构建步骤函数闭包
+                async def step_login(p):
+                    if not await safe_goto(p, login_url, timeout=self.timeout):
+                        raise Exception(f"无法访问 {login_url}")
+                    await self._safe_fill(p, login_s["username"], credentials.get("username", ""), "用户名")
+                    await self._safe_fill(p, login_s["password"], credentials.get("password", ""), "密码")
+                    if await detect_captcha(p):
+                        captcha_path = await self._screenshot(p, "captcha")
+                        screenshots.append(captcha_path)
+                        if not self.headless:
+                            captcha_input = login_s.get("captcha_input")
+                            if captcha_input:
+                                await p.wait_for_function(
+                                    f"document.querySelector('{captcha_input}')?.value?.length >= 4",
+                                    timeout=self.timeout * 2,
+                                )
+                    await self._safe_click(p, login_s["submit"], "登录按钮")
+                    await p.wait_for_timeout(3000)
+                    if not await self._check_login_success(p):
+                        raise Exception("登录失败：用户名或密码错误")
+                    return True
+
+                async def step_navigate(p):
+                    await self._safe_click(p, filing_s.get("menu_declare", ""), "我要办税")
+                    await p.wait_for_timeout(2000)
+                    await self._safe_click(p, filing_s.get("menu_item", ""), f"{tax_type}申报入口")
+                    await p.wait_for_timeout(3000)
+                    await self._screenshot(p, "filing_form")
+                    return True
+
+                async def step_fill(p):
+                    if tax_type == "vat":
+                        await self._safe_fill(p, filing_s.get("input_period_sales", ""), str(tax_data.get("period_sales", 0)), "销售额")
+                        await self._safe_fill(p, filing_s.get("input_tax_payable", ""), str(tax_data.get("tax_payable", 0)), "应纳税额")
+                    elif tax_type == "corporate_income":
+                        await self._safe_fill(p, filing_s.get("input_revenue", ""), str(tax_data.get("total_revenue", 0)), "营业收入")
+                        await self._safe_fill(p, filing_s.get("input_cost", ""), str(tax_data.get("total_cost", 0)), "营业成本")
+                        await self._safe_fill(p, filing_s.get("input_profit", ""), str(tax_data.get("total_profit", 0)), "利润总额")
+                        await self._safe_fill(p, filing_s.get("input_tax_payable", ""), str(tax_data.get("tax_payable", 0)), "应纳税所得额")
+                    elif tax_type == "surtax":
+                        await self._safe_fill(p, filing_s.get("input_vat_amount", ""), str(tax_data.get("vat_paid", 0)), "实缴增值税")
+                    elif tax_type == "stamp_duty":
+                        await self._safe_fill(p, filing_s.get("input_taxable_amount", ""), str(tax_data.get("taxable_amount", 0)), "计税金额")
+                        await self._safe_fill(p, filing_s.get("input_tax_payable", ""), str(tax_data.get("tax_payable", 0)), "应纳税额")
+                    elif tax_type == "property_tax":
+                        await self._safe_fill(p, filing_s.get("input_property_value", ""), str(tax_data.get("property_original_value", 0)), "房产原值")
+                        await self._safe_fill(p, filing_s.get("input_tax_payable", ""), str(tax_data.get("tax_payable", 0)), "应纳税额")
+                    elif tax_type == "land_use_tax":
+                        await self._safe_fill(p, filing_s.get("input_land_area", ""), str(tax_data.get("land_area", 0)), "占地面积")
+                        await self._safe_fill(p, filing_s.get("input_tax_payable", ""), str(tax_data.get("tax_payable", 0)), "应纳税额")
+                    else:
+                        for key, val in tax_data.items():
+                            if key in ("tax_type", "period", "message", "note"):
+                                continue
+                            selector = filing_s.get(f"input_{key}", f"#{key}")
+                            await self._safe_fill(p, selector, str(val), key)
+                    return True
+
+                async def step_submit(p):
+                    await self._safe_click(p, filing_s.get("btn_submit", ""), "提交申报")
+                    await p.wait_for_timeout(2000)
+                    await self._safe_click(p, filing_s.get("btn_confirm", ""), "确认提交")
+                    await p.wait_for_timeout(5000)
+                    return True
+
+                async def step_verify(p):
+                    await self._screenshot(p, "filing_result")
+                    count = await p.locator(filing_s.get("success_indicator", "text=成功")).count()
+                    return count > 0
+
+                steps = [
+                    AutomationStep("login", fn=step_login, is_idempotent=False, max_retries=1),
+                    AutomationStep("navigate", fn=step_navigate, is_idempotent=True, max_retries=2),
+                    AutomationStep("fill_form", fn=step_fill, is_idempotent=True, max_retries=2),
+                    AutomationStep("submit", fn=step_submit, is_idempotent=False, max_retries=1),
+                    AutomationStep("verify", fn=step_verify, is_idempotent=True, max_retries=1),
+                ]
+
+                run = checkpoint_engine.create_run("filing", steps)
+                cp_result = await checkpoint_engine.execute(run, page, context)
+
+                if cp_result["success"]:
+                    result = FilingResult(
+                        success=True,
+                        message=f"申报成功（含 {cp_result['checkpoints']} 个检查点）",
+                        tax_type=tax_type, period=period,
+                        screenshot_paths=screenshots,
+                        transaction_id=self.run_id,
+                        filed_at=datetime.now().isoformat(),
+                        steps_completed=[s.name for s in steps],
+                    )
+                else:
+                    result = FilingResult(
+                        success=False,
+                        message=cp_result["message"],
+                        tax_type=tax_type, period=period,
+                        screenshot_paths=screenshots,
+                        failed_step=cp_result.get("failed_step", ""),
+                        steps_completed=[s.name for s in steps[:cp_result.get("step_index", 0)]],
+                        error_detail=cp_result["message"],
+                    )
+
+            except Exception as e:
+                log_error("tax_auto_cp", e, {"tax_type": tax_type, "period": period, "run_id": self.run_id})
+                try:
+                    debug_path = await save_debug_snapshot(page, f"tax_auto_cp_error_{self.run_id}")
+                    screenshots.append(debug_path)
+                except Exception:
+                    pass
+                result = FilingResult(
+                    success=False,
+                    message=f"申报异常: {str(e)[:150]}",
+                    screenshot_paths=screenshots,
+                    error_detail=str(e)[:500],
+                )
+
+            finally:
+                await browser.close()
+
+        print(f"[自动申报-CP] 完成: {result.message}")
         return result
 
 

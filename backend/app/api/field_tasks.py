@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.field_task import FieldTask
-from app.services.auth import get_current_user, require_modify
+from app.services.auth import get_current_user, require_modify, require_not_client
 from app.models.user import User
 from app.services.version_control import commit
 from app.schemas.core import FieldTaskCreate
@@ -46,7 +46,7 @@ def create_task(data: FieldTaskCreate, db: Session = Depends(get_db), user: User
 
 
 @router.patch("/{task_id}")
-def update_task(task_id: str, data: dict, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def update_task(task_id: str, data: dict, db: Session = Depends(get_db), _=Depends(get_current_user), __=Depends(require_not_client)):
     t = db.query(FieldTask).filter(FieldTask.id == task_id).first()
     if not t: raise HTTPException(404, "任务不存在")
     before = {"title": t.title, "status": t.status, "assigned_to": t.assigned_to}

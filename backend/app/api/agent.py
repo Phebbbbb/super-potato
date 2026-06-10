@@ -1,4 +1,4 @@
-"""AI 税务顾问智能体 API"""
+"""AI 税务顾问智能体 API — 集成 RAG 税法检索 + 置信度评分"""
 import json
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -20,16 +20,23 @@ SYSTEM_PROMPT = """你是一位资深中国税务师和注册会计师，拥有2
 - 专业、准确，引用具体税率和法规条文
 - 对于不确定的问题，明确指出"此问题建议咨询当地税务机关"
 - 给出分录时使用标准格式：借：科目名称 金额 / 贷：科目名称 金额
-- 用中文回答，简洁明了"""
+- 用中文回答，简洁明了
+- 如果提供了税法参考条文，请在回答末尾引用来源"""
 
 
 @router.post("/chat")
 async def agent_chat(data: AgentChatRequest, db: Session = Depends(get_db)):
-    """AI 税务顾问对话（非流式简化版）"""
+    """AI 税务顾问对话（集成 RAG 税法检索）"""
     user_message = data.message
     context = data.context
 
+    # RAG 检索相关税法
+    from app.services.rag_engine import search_tax_law
+    rag_result = search_tax_law(user_message, top_k=3)
+
     full_prompt = SYSTEM_PROMPT
+    if rag_result.answer_context:
+        full_prompt += f"\n\n【参考税法条文 — 请据此回答并引用来源】\n{rag_result.answer_context}"
     if context:
         full_prompt += f"\n\n当前客户信息：{context}"
 
@@ -46,14 +53,182 @@ async def agent_chat(data: AgentChatRequest, db: Session = Depends(get_db)):
             if resp.status_code == 200:
                 try:
                     result = resp.json()
-                    return {"reply": result["content"][0]["text"], "source": "claude"}
+                    return {
+                        "reply": result["content"][0]["text"],
+                        "source": "claude",
+                        "rag_confidence": rag_result.confidence,
+                        "rag_confidence_label": rag_result.confidence_label,
+                        "citations": [law["source"] for law in rag_result.laws[:3]],
+                    }
                 except (KeyError, IndexError, TypeError) as e:
                     return {"reply": f"AI 响应解析失败: {e}", "source": "error"}
             return {"reply": f"AI 服务调用失败: {resp.status_code}", "source": "error"}
 
-    # 无 API key 时用规则引擎答复
+    # 无 API key 时用规则引擎答复（也附带 RAG 结果）
     reply = rule_based_reply(user_message)
-    return {"reply": reply, "source": "rule_engine"}
+    if rag_result.primary_citation:
+        reply += f"\n\n📚 参考法规：{rag_result.primary_citation}"
+        if rag_result.confidence_label != "低":
+            reply += f"（匹配度：{rag_result.confidence_label}）"
+    return {
+        "reply": reply,
+        "source": "rule_engine",
+        "rag_confidence": rag_result.confidence,
+        "rag_confidence_label": rag_result.confidence_label,
+        "citations": [law["source"] for law in rag_result.laws[:3]],
+    }
+
+
+# ===== RAG 独立接口 =====
+
+@router.get("/rag/search")
+def rag_search(q: str = Query(..., description="搜索关键词"), top_k: int = Query(5, ge=1, le=10)):
+    """税法条文检索 — 独立接口"""
+    from app.services.rag_engine import search_tax_law
+    result = search_tax_law(q, top_k)
+    return {
+        "query": result.query,
+        "laws": result.laws,
+        "confidence": result.confidence,
+        "confidence_label": result.confidence_label,
+        "primary_citation": result.primary_citation,
+    }
+
+
+# ===== 全文搜索接口 =====
+
+@router.get("/search")
+def full_text_search(
+    q: str = Query(..., description="搜索关键词"),
+    collection: str = Query("all", description="索引集合: vouchers/clients/tax_laws/all"),
+    top_k: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """全文搜索 — 跨凭证/客户/税法集合的BM25检索"""
+    from app.services.search_engine import get_search, index_vouchers, index_clients, index_tax_laws
+    from app.models.voucher import AccountingVoucher
+    from app.models.client import Client
+    import json as _json
+
+    engine = get_search()
+
+    # 按需构建索引（首次搜索时初始化）
+    if collection in ("vouchers", "all") and "vouchers" not in engine.list_collections():
+        vouchers = db.query(AccountingVoucher).limit(500).all()
+        index_vouchers([
+            {"id": v.id, "voucher_no": v.voucher_no, "summary": v.summary,
+             "maker": v.maker or "", "reviewer": v.reviewer or ""}
+            for v in vouchers
+        ])
+
+    if collection in ("clients", "all") and "clients" not in engine.list_collections():
+        clients = db.query(Client).limit(500).all()
+        index_clients([
+            {"id": c.id, "name": c.name, "tax_no": c.tax_no,
+             "contact_name": c.contact_name or "", "industry": c.industry or ""}
+            for c in clients
+        ])
+
+    if collection in ("tax_laws", "all") and "tax_laws" not in engine.list_collections():
+        from app.services.rag_engine import TAX_LAW_KB
+        index_tax_laws(TAX_LAW_KB)
+
+    # 搜索
+    if collection == "all":
+        from app.services.search_engine import search_all
+        all_results = search_all(q, top_k)
+        return {
+            "query": q,
+            "collections": {
+                coll: {"results": r.results, "total": r.total, "took_ms": r.took_ms}
+                for coll, r in all_results.items()
+            },
+        }
+
+    result = engine.search(collection, q, top_k)
+    return {"query": q, "collection": collection, "results": result.results,
+            "total": result.total, "took_ms": result.took_ms}
+
+
+# ===== 税务风险检测接口 =====
+
+@router.post("/risk-check")
+def tax_risk_check(client_id: str = Query(None), db: Session = Depends(get_db)):
+    """对指定客户的凭证进行税务风险检测（Benford + Z-Score + 规则引擎）"""
+    from app.services.tax_anomaly_detector import analyze_tax_risk
+    from app.models.voucher import AccountingVoucher
+
+    q = db.query(AccountingVoucher)
+    if client_id:
+        q = q.filter(AccountingVoucher.client_id == client_id)
+
+    vouchers = q.order_by(AccountingVoucher.created_at.desc()).limit(200).all()
+
+    if not vouchers:
+        return {"has_anomaly": False, "risk_level": "low", "message": "暂无凭证数据"}
+
+    voucher_dicts = []
+    amounts = []
+    for v in vouchers:
+        voucher_dicts.append({
+            "id": v.id,
+            "voucher_no": v.voucher_no,
+            "voucher_date": v.voucher_date.isoformat() if v.voucher_date else "",
+            "summary": v.summary,
+            "total_debit": v.total_debit,
+            "total_credit": v.total_credit,
+            "status": v.status,
+        })
+        amounts.append(v.total_debit or 0)
+
+    result = analyze_tax_risk(voucher_dicts, amounts)
+
+    return {
+        "client_id": client_id,
+        "voucher_count": len(vouchers),
+        "has_anomaly": result.has_anomaly,
+        "risk_level": result.risk_level,
+        "risk_score": result.risk_score,
+        "findings": result.findings,
+        "recommendation": result.recommendation,
+    }
+
+
+# ===== Dashboard 风险摘要 =====
+
+@router.get("/risk-summary")
+def tax_risk_summary(db: Session = Depends(get_db)):
+    """全局税务风险摘要（Dashboard 用）"""
+    from app.services.tax_anomaly_detector import analyze_tax_risk, check_benford
+    from app.models.voucher import AccountingVoucher
+    from app.models.filing import TaxFiling
+
+    vouchers = db.query(AccountingVoucher).order_by(AccountingVoucher.created_at.desc()).limit(500).all()
+    amounts = [v.total_debit for v in vouchers if v.total_debit]
+
+    # Benford 快速检测
+    benford = check_benford(amounts) if len(amounts) >= 30 else None
+
+    # 逾期申报检测
+    from datetime import date
+    overdue_filings = db.query(TaxFiling).filter(
+        TaxFiling.status == "pending_review"
+    ).count()
+
+    risk_clients = set()
+    for v in vouchers:
+        if v.status == "draft" and v.client_id:
+            risk_clients.add(v.client_id)
+
+    return {
+        "benford_suspicious": benford["is_suspicious"] if benford else None,
+        "benford_chi2": benford["chi2_statistic"] if benford else None,
+        "total_vouchers_analyzed": len(amounts),
+        "overdue_filings": overdue_filings,
+        "draft_voucher_count": sum(1 for v in vouchers if v.status == "draft"),
+        "clients_with_drafts": len(risk_clients),
+        "overall_risk": "high" if (benford and benford["is_suspicious"]) else ("medium" if overdue_filings > 0 else "low"),
+    }
 
 
 def rule_based_reply(message: str) -> str:

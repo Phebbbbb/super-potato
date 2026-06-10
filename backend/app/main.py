@@ -21,7 +21,7 @@ def _scheduled_announcement_refresh():
         if count > 0:
             print(f"[调度] 公告刷新完成，新增 {count} 条")
             create_notification(db, "announcement", f"国家税务总局发布了 {count} 条新政策公告",
-                                message=f"本次共更新 {count} 条政策公告，请及时查阅", link="/operation-log")
+                                message=f"本次共更新 {count} 条政策公告，请及时查阅", link="/dashboard")
             db.commit()
     except Exception as e:
         print(f"[调度] 公告刷新失败: {e}")
@@ -309,6 +309,56 @@ def _auto_scan_all_clients():
         db.close()
 
 
+def _subscription_expiry_reminder():
+    """每日检查即将到期和已过期的客户订阅，生成通知提醒"""
+    from app.db import SessionLocal
+    from app.services.notification_service import create_notification
+    from app.services.subscription_service import get_client_subscription, list_all_subscriptions
+    from datetime import date as dt_date, timedelta
+
+    db = SessionLocal()
+    try:
+        subs = list_all_subscriptions(db)
+        today = dt_date.today()
+        for s in subs:
+            if not s.get("end_date") or s.get("tier") == "none":
+                continue
+            end_date = dt_date.fromisoformat(s["end_date"])
+            days_left = (end_date - today).days
+
+            client_name = s.get("client_name", "未知客户")
+            phone = s.get("phone", "")
+
+            if days_left <= 0:
+                create_notification(
+                    db, "deadline",
+                    f"订阅已到期 — {client_name}",
+                    f"客户 {client_name}（{phone}）的{s['tier_label']}已于 {s['end_date']} 到期，请及时续费或联系客户",
+                    link="/settings",
+                )
+            elif days_left <= 7:
+                create_notification(
+                    db, "deadline",
+                    f"订阅即将到期 — {client_name}（剩余 {days_left} 天）",
+                    f"客户 {client_name}（{phone}）的{s['tier_label']}将于 {s['end_date']} 到期，剩余 {days_left} 天",
+                    link="/settings",
+                )
+            elif days_left <= 30:
+                create_notification(
+                    db, "rpa",
+                    f"订阅到期提醒 — {client_name}（剩余 {days_left} 天）",
+                    f"客户 {client_name} 的{s['tier_label']}将于 {s['end_date']} 到期",
+                    link="/settings",
+                )
+
+        db.commit()
+    except Exception as e:
+        print(f"[调度] 订阅到期提醒失败: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _daily_risk_scan():
     """每日税务风控巡检：扫描所有客户，检测异常（税负率异常、零申报、未申报等）"""
     from app.db import SessionLocal
@@ -430,6 +480,7 @@ scheduler.add_job(_auto_month_end_closing, "cron", hour=22, minute=0, id="month_
 scheduler.add_job(_auto_submit_due_filings, "cron", hour=8, minute=0, id="auto_submit_due_filings")
 scheduler.add_job(_auto_scan_all_clients, "interval", minutes=30, id="auto_scan_clients")
 scheduler.add_job(_daily_risk_scan, "cron", hour=7, minute=0, id="daily_risk_scan")
+scheduler.add_job(_subscription_expiry_reminder, "cron", hour=9, minute=0, id="subscription_expiry_reminder")
 scheduler.start()
 
 
@@ -447,6 +498,21 @@ async def lifespan(_app: FastAPI):
         print("[系统] ⚠️ Playwright 未安装 — 自动化开票/申报不可用，请执行: pip install playwright && playwright install chromium")
     except Exception as e:
         print(f"[系统] ⚠️ Playwright 异常 — {str(e)[:100]}")
+
+    # 启动自动化采集服务
+    try:
+        from app.services import file_watcher, email_collector
+        file_watcher.start()
+        email_collector.start()
+        fw_status = file_watcher.get_status()
+        ec_status = email_collector.get_status()
+        if fw_status["watchers"] > 0:
+            print(f"[系统] 热文件夹监控已启动 — {fw_status['watchers']} 个目录")
+        if ec_status["collectors"] > 0:
+            print(f"[系统] 邮件采集已启动 — {ec_status['collectors']} 个采集器")
+        print("[系统] 自动化采集引擎就绪")
+    except Exception as e:
+        print(f"[系统] 自动化采集服务启动失败: {e}")
     yield
     try:
         scheduler.shutdown()
@@ -455,6 +521,55 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="2.1.0", lifespan=lifespan)
+
+# ===== 全局异常处理器 =====
+from fastapi import Request, HTTPException
+from fastapi.responses import JSONResponse
+from app.services.error_handler import ErrorCode, log_error, api_error as _api_error
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException):
+    code_map = {
+        401: ErrorCode.PERMISSION_DENIED,
+        403: ErrorCode.PERMISSION_DENIED,
+        404: ErrorCode.NOT_FOUND,
+        409: ErrorCode.CONFLICT,
+        429: ErrorCode.RATE_LIMIT,
+    }
+    code = code_map.get(exc.status_code, ErrorCode.INTERNAL_ERROR)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": code.value, "detail": exc.detail, "retry": exc.status_code >= 500},
+    )
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(_request: Request, exc: ValueError):
+    log_error("api", exc)
+    return JSONResponse(
+        status_code=422,
+        content={"code": ErrorCode.VALIDATION_ERROR.value, "detail": str(exc), "retry": False},
+    )
+
+
+@app.exception_handler(PermissionError)
+async def permission_error_handler(_request: Request, exc: PermissionError):
+    log_error("api", exc)
+    return JSONResponse(
+        status_code=403,
+        content={"code": ErrorCode.PERMISSION_DENIED.value, "detail": str(exc), "retry": False},
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(_request: Request, exc: Exception):
+    log_error("api", exc, {"path": str(_request.url)})
+    return JSONResponse(
+        status_code=500,
+        content={"code": ErrorCode.INTERNAL_ERROR.value, "detail": "服务器内部错误，请重试或联系管理员", "retry": True},
+    )
+
 
 # 速率限制（最先执行）
 app.middleware("http")(rate_limit_middleware)
@@ -475,13 +590,59 @@ app.mount("/qrcodes", StaticFiles(directory=settings.qrcode_dir), name="qrcodes"
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": settings.app_name, "version": "2.0.0"}
+    """健康检查 — DB连通性 + 磁盘空间 + 启动时间"""
+    import shutil
+    import time as _time
+    from app.db import SessionLocal
+
+    db_ok = False
+    db_error = ""
+    try:
+        db = SessionLocal()
+        db.execute(__import__("sqlalchemy").text("SELECT 1"))
+        db.close()
+        db_ok = True
+    except Exception as e:
+        db_error = str(e)[:100]
+
+    disk = shutil.disk_usage(".")
+    disk_free_gb = round(disk.free / (1024**3), 1)
+
+    startup_seconds = round(_time.time() - _APP_START_TIME, 0)
+
+    # 获取熔断器状态
+    cb_status = {}
+    try:
+        from app.services.playwright_helpers import _tax_bureau_cb, _ocr_cb
+        cb_status = {
+            "tax_bureau": _tax_bureau_cb._state,
+            "ocr": _ocr_cb._state,
+        }
+    except Exception:
+        pass
+
+    components = {
+        "database": {"status": "ok" if db_ok else "error", "error": db_error},
+        "disk": {"free_gb": disk_free_gb, "status": "ok" if disk_free_gb > 1 else "warning"},
+    }
+    if cb_status:
+        components["circuit_breakers"] = cb_status
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "app": settings.app_name,
+        "version": "2.1.0",
+        "uptime_seconds": startup_seconds,
+        "components": components,
+    }
+
+_APP_START_TIME = __import__("time").time()
 
 
 # 注册路由
-from app.api import rpa, documents, vouchers, filings, accounts, qr, reports, feedback, rpa_trigger
+from app.api import rpa, documents, vouchers, filings, accounts, qr, reports, feedback, rpa_trigger, trace
 from app.api import settings as settings_api
-from app.api import auth, clients, users, payroll, bank, field_tasks, agent, tax_calendar, audit, tax_automation, invoices, backup, version_control, announcements, notifications, fixed_assets, contracts, batch_automation, annual_reports, tax_settlement, invoice_verify, period_close, precheck
+from app.api import auth, clients, users, payroll, bank, field_tasks, agent, tax_calendar, audit, tax_automation, invoices, backup, version_control, announcements, notifications, fixed_assets, contracts, batch_automation, annual_reports, tax_settlement, invoice_verify, period_close, precheck, anomaly, priority, checkpoints, subscriptions, interactions, automation, predictive, wechat_auth, migration, business
 
 app.include_router(rpa.router, prefix="/api/rpa", tags=["RPA对接"])
 app.include_router(rpa_trigger.router, prefix="/api/rpa", tags=["RPA触发"])
@@ -490,6 +651,7 @@ app.include_router(vouchers.router, prefix="/api/vouchers", tags=["记账凭证"
 app.include_router(filings.router, prefix="/api/filings", tags=["纳税申报"])
 app.include_router(accounts.router, prefix="/api/accounts", tags=["会计科目"])
 app.include_router(qr.router, prefix="/api/qr", tags=["QR追溯"])
+app.include_router(trace.router, prefix="/api/trace", tags=["记账追溯"])
 app.include_router(reports.router, prefix="/api/reports", tags=["财务报表"])
 app.include_router(feedback.router, prefix="/api/feedback", tags=["人工反馈修正"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["系统配置"])
@@ -516,6 +678,16 @@ app.include_router(tax_settlement.router, prefix="/api/tax", tags=["汇算清缴
 app.include_router(invoice_verify.router, prefix="/api/invoice-verify", tags=["发票查验"])
 app.include_router(period_close.router, prefix="/api/rpa", tags=["一键关账"])
 app.include_router(precheck.router, prefix="/api", tags=["预检优化"])
+app.include_router(anomaly.router, prefix="/api", tags=["异常检测"])
+app.include_router(priority.router, prefix="/api", tags=["智能优先级"])
+app.include_router(checkpoints.router, prefix="/api", tags=["检查点引擎"])
+app.include_router(subscriptions.router, prefix="/api", tags=["订阅与权限"])
+app.include_router(interactions.router, prefix="/api/interactions", tags=["服务端-客户端交互"])
+app.include_router(automation.router, prefix="/api/automation", tags=["自动化采集"])
+app.include_router(predictive.router, prefix="/api", tags=["预测分析"])
+app.include_router(wechat_auth.router, prefix="/api", tags=["微信绑定"])
+app.include_router(migration.router, prefix="/api/migration", tags=["换机助手"])
+app.include_router(business.router, prefix="/api/business", tags=["工商中心"])
 
 
 if __name__ == "__main__":

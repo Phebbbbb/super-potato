@@ -1,46 +1,52 @@
-"""统一错误处理 — 错误码枚举、结构化异常、日志落文件"""
-import logging
-import traceback
+"""统一错误处理 v2 — loguru结构化日志 + 错误码枚举 + 熔断器感知"""
+
+import sys
 from pathlib import Path
 from enum import Enum
 from datetime import datetime
-from app.config import settings
+
+from loguru import logger
 
 
-# ===== 日志配置 =====
-def setup_logging():
-    log_dir = Path(settings.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
+# ===== 移除默认 handler，配置 loguru =====
+logger.remove()
 
-    logger = logging.getLogger("smart_tax")
-    logger.setLevel(logging.INFO)
+# 开发环境：彩色输出到控制台
+logger.add(
+    sys.stderr,
+    level="DEBUG",
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | <level>{message}</level>",
+    colorize=True,
+)
 
-    # 文件 handler
-    fh = logging.FileHandler(str(log_file), encoding="utf-8")
-    fh.setLevel(logging.INFO)
-    fh.setFormatter(logging.Formatter(
-        "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
-    logger.addHandler(fh)
+# 生产环境：结构化 JSON 到文件（按天轮转，保留 30 天）
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 控制台 handler
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.WARNING)
-    ch.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(ch)
+logger.add(
+    LOG_DIR / "app_{time:YYYYMMDD}.log",
+    level="INFO",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message} | extra={extra}",
+    rotation="00:00",  # 每天午夜轮转
+    retention="30 days",
+    encoding="utf-8",
+    enqueue=True,  # 多进程安全
+    backtrace=True,
+    diagnose=False,  # 生产环境不泄露变量值
+)
 
-    # 清理超过30天的日志
-    cutoff = datetime.now().timestamp() - 30 * 86400
-    for f in log_dir.iterdir():
-        if f.is_file() and f.stat().st_mtime < cutoff:
-            f.unlink()
-
-    return logger
-
-
-logger = setup_logging()
+# 错误日志单独文件
+logger.add(
+    LOG_DIR / "error_{time:YYYYMMDD}.log",
+    level="ERROR",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message} | extra={extra}",
+    rotation="00:00",
+    retention="90 days",
+    encoding="utf-8",
+    enqueue=True,
+    backtrace=True,
+    diagnose=True,  # 错误日志保留诊断信息
+)
 
 
 # ===== 错误码 =====
@@ -49,14 +55,14 @@ class ErrorCode(str, Enum):
     NOT_FOUND = "NOT_FOUND"
     VALIDATION_ERROR = "VALIDATION_ERROR"
     PERMISSION_DENIED = "PERMISSION_DENIED"
-    CONFLICT = "CONFLICT"  # 状态冲突（如重复操作）
-    UPSTREAM_ERROR = "UPSTREAM_ERROR"  # Playwright/第三方异常
+    CONFLICT = "CONFLICT"
+    UPSTREAM_ERROR = "UPSTREAM_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     RATE_LIMIT = "RATE_LIMIT"
+    CIRCUIT_OPEN = "CIRCUIT_OPEN"  # 熔断器打开
 
 
 def api_error(code: ErrorCode, detail: str, retry: bool = False, data: dict = None) -> dict:
-    """构造统一错误响应"""
     err = {"code": code.value, "detail": detail, "retry": retry}
     if data:
         err["data"] = data
@@ -64,7 +70,6 @@ def api_error(code: ErrorCode, detail: str, retry: bool = False, data: dict = No
 
 
 def api_success(data: dict = None, message: str = "") -> dict:
-    """构造统一成功响应"""
     result = {"code": ErrorCode.SUCCESS.value}
     if data:
         result["data"] = data
@@ -74,14 +79,24 @@ def api_success(data: dict = None, message: str = "") -> dict:
 
 
 def log_error(module: str, exc: Exception, context: dict = None):
-    """记录异常到日志"""
-    logger.error(
-        f"[{module}] {type(exc).__name__}: {str(exc)[:300]}\n"
-        f"context: {context or {}}\n"
-        f"traceback: {traceback.format_exc()[-500:]}"
+    """记录异常 — loguru 自动捕获 traceback"""
+    logger.opt(exception=exc).error(
+        f"[{module}] {type(exc).__name__}: {str(exc)[:300]}",
+        context=context or {},
+        module=module,
     )
 
 
 def log_info(module: str, action: str, detail: str = ""):
-    """记录操作到日志"""
-    logger.info(f"[{module}] {action} | {detail}")
+    """记录操作"""
+    logger.info(f"[{module}] {action} | {detail}", module=module, action=action)
+
+
+def log_warning(module: str, message: str, **kwargs):
+    """记录警告"""
+    logger.warning(f"[{module}] {message}", module=module, **kwargs)
+
+
+def log_debug(module: str, message: str, **kwargs):
+    """记录调试信息"""
+    logger.debug(f"[{module}] {message}", module=module, **kwargs)

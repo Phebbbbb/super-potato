@@ -69,7 +69,7 @@ def list_accounts(category: str = None, is_active: bool = True, db: Session = De
 
 
 @router.get("/tree")
-def get_account_tree(db: Session = Depends(get_db)):
+def get_account_tree(db: Session = Depends(get_db), _=Depends(get_current_user)):
     """会计科目树形结构"""
     cache_key = "accounts:tree"
     cached = cache_get(cache_key)
@@ -105,7 +105,7 @@ def get_account_tree(db: Session = Depends(get_db)):
 
 
 @router.get("/{account_id}")
-def get_account(account_id: str, db: Session = Depends(get_db)):
+def get_account(account_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     """会计科目详情"""
     a = db.query(ChartOfAccount).filter(ChartOfAccount.id == account_id).first()
     if not a:

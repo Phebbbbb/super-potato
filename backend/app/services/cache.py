@@ -69,14 +69,20 @@ class RedisBackend(CacheBackend):
 
 
 class MemoryBackend(CacheBackend):
-    """内存降级后端（带 TTL）"""
+    """内存降级后端（带 TTL + 惰性清理）"""
 
     def __init__(self):
         self._store: dict[str, tuple[str, float]] = {}
         self._lock = threading.Lock()
+        self._last_cleanup = time.time()
+        self._cleanup_interval = 60  # 每 60 秒批量清理一次
 
     def _cleanup(self):
+        """定期批量清理过期键（O(N) 但仅每 60 秒触发一次）"""
         now = time.time()
+        if now - self._last_cleanup < self._cleanup_interval:
+            return
+        self._last_cleanup = now
         with self._lock:
             expired = [k for k, (_, exp) in self._store.items() if now > exp]
             for k in expired:
@@ -86,9 +92,10 @@ class MemoryBackend(CacheBackend):
         self._cleanup()
         with self._lock:
             entry = self._store.get(key)
-            if entry and time.time() < entry[1]:
-                return entry[0]
             if entry:
+                now = time.time()
+                if now < entry[1]:
+                    return entry[0]
                 del self._store[key]
         return None
 

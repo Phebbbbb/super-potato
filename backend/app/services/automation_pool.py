@@ -329,6 +329,32 @@ class ParallelInvoiceEngine:
         self._jobs: dict[str, BatchJob] = {}
         self._headless = headless
 
+    def get_job_summary(self, job_id: str) -> dict:
+        """查询批量开票作业进度"""
+        job = self._jobs.get(job_id)
+        if not job:
+            return {"error": "任务不存在"}
+        return {
+            "job_id": job.job_id,
+            "job_type": job.job_type,
+            "status": job.status,
+            "total": job.total,
+            "completed": job.completed,
+            "failed": job.failed,
+            "created_at": job.created_at,
+            "tasks": [
+                {
+                    "task_id": t.task_id,
+                    "client_id": t.client_id,
+                    "client_name": t.client_name,
+                    "status": t.status,
+                    "result": t.result,
+                    "error": t.error,
+                }
+                for t in job.tasks
+            ],
+        }
+
     async def submit_batch(
         self,
         invoices_data: list[dict],

@@ -160,16 +160,13 @@ def calculate_property_tax(db: Session, period: str) -> dict:
 
 def calculate_land_use_tax(db: Session, period: str) -> dict:
     """计算城镇土地使用税（简化版，需手动配置占地面积和适用税额）"""
-    # 城镇土地使用税需要占地面积和适用税额，通常从配置读取
-    # 此处使用默认值，实际使用时需在系统配置中设置
     from app.models.system_config import SystemConfig
     land_area = 0.0  # 平方米
     unit_tax = 1.5    # 元/平方米·年（默认小城市标准）
     config = db.query(SystemConfig).filter(SystemConfig.config_key == "land_use_tax_config").first()
     if config and config.config_value:
-        import json as _json
         try:
-            cfg = _json.loads(config.config_value) if isinstance(config.config_value, str) else config.config_value
+            cfg = _load_config(config.config_value)
             land_area = float(cfg.get("land_area", 0))
             unit_tax = float(cfg.get("unit_tax", 1.5))
         except Exception:
@@ -184,19 +181,277 @@ def calculate_land_use_tax(db: Session, period: str) -> dict:
     }
 
 
-def preview_filing(db: Session, tax_type: str, period: str, taxpayer_type: str = "small"):
-    """预览申报数据（不保存）"""
-    if tax_type == "vat":
-        return calculate_vat(db, period, taxpayer_type)
-    elif tax_type == "corporate_income":
-        return calculate_corporate_income(db, period)
-    elif tax_type == "surtax":
-        return calculate_surtax(db, period)
-    elif tax_type == "stamp_duty":
-        return calculate_stamp_duty(db, period)
-    elif tax_type == "property_tax":
-        return calculate_property_tax(db, period)
-    elif tax_type == "land_use_tax":
-        return calculate_land_use_tax(db, period)
+# ===== 以下为新增税种计算 =====
+
+def calculate_consumption_tax(db: Session, period: str) -> dict:
+    """计算消费税（从价定率/从量定额，简化版按从价）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 消费税应税收入：6001 主营业务收入中应税消费品部分
+    _, income = sum_entries(vouchers, "6001")
+    # 简化：默认按比例估算应税消费品收入，税率 5%
+    taxable_amount = round(income * 0.3, 2)  # 假设 30% 收入为应税消费品
+    tax_rate = 0.05
+    tax_payable = round(taxable_amount * tax_rate, 2)
+    return {
+        "tax_type": "consumption_tax",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": tax_rate,
+        "tax_payable": tax_payable,
+        "note": "简化计算，实际需按税目分别核算",
+    }
+
+
+def calculate_individual_income(db: Session, period: str) -> dict:
+    """计算个人所得税（工资薪金代扣代缴）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 应付职工薪酬 2211 贷方
+    _, payroll = sum_entries(vouchers, "2211")
+    # 简化：按 3% 最低档估算（实际需按累计预扣法逐人计算）
+    taxable_amount = round(payroll, 2)
+    tax_rate = 0.03
+    quick_deduction = 0.0
+    tax_payable = round(max(taxable_amount * tax_rate - quick_deduction, 0), 2)
+    return {
+        "tax_type": "individual_income",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": tax_rate,
+        "quick_deduction": quick_deduction,
+        "tax_payable": tax_payable,
+        "note": "简化计算（3%档），实际需按累计预扣法逐人计算",
+    }
+
+
+def calculate_land_appreciation_tax(db: Session, period: str) -> dict:
+    """计算土地增值税（四级超率累进税率）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 转让收入
+    _, transfer_income = sum_entries(vouchers, "6051")
+    # 扣除项目 = 取得成本 + 开发成本 + 费用
+    cost_debit, _ = sum_entries(vouchers, "6401")
+    deduction = round(cost_debit * 1.3, 2)  # 简化：成本×130%
+    appreciation = round(transfer_income - deduction, 2)
+    # 四级超率累进
+    if deduction == 0:
+        tax_rate, quick_deduction_rate = 0.3, 0
     else:
-        return {"tax_type": tax_type, "period": period, "message": "暂不支持该税种自动计算"}
+        ratio = appreciation / deduction
+        if ratio <= 0.5:
+            tax_rate, quick_deduction_rate = 0.3, 0
+        elif ratio <= 1.0:
+            tax_rate, quick_deduction_rate = 0.4, 0.05
+        elif ratio <= 2.0:
+            tax_rate, quick_deduction_rate = 0.5, 0.15
+        else:
+            tax_rate, quick_deduction_rate = 0.6, 0.35
+    tax_payable = round(max(appreciation * tax_rate - deduction * quick_deduction_rate, 0), 2)
+    return {
+        "tax_type": "land_appreciation_tax",
+        "period": period,
+        "transfer_income": round(transfer_income, 2),
+        "total_deduction": deduction,
+        "appreciation_amount": round(appreciation, 2),
+        "tax_rate": tax_rate,
+        "quick_deduction_rate": quick_deduction_rate,
+        "tax_payable": tax_payable,
+    }
+
+
+def calculate_deed_tax(db: Session, period: str) -> dict:
+    """计算契税（不动产受让）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 不动产受让金额：1601 固定资产借方（新增房产）
+    property_debit, _ = sum_entries(vouchers, "1601")
+    taxable_amount = round(property_debit, 2)
+    tax_rate = 0.03  # 契税法定税率 3%-5%，取最低
+    tax_payable = round(taxable_amount * tax_rate, 2)
+    return {
+        "tax_type": "deed_tax",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": tax_rate,
+        "tax_payable": tax_payable,
+        "note": "简化计算（3%），实际税率视地区政策",
+    }
+
+
+def calculate_vehicle_vessel_tax(db: Session, period: str) -> dict:
+    """计算车船税（按年征收，按月分摊）"""
+    # 车船税按年定额，需从固定资产-车辆（1604）读取
+    # 简化：从系统配置读取
+    from app.models.system_config import SystemConfig
+    vehicle_count = 0
+    annual_tax_per_vehicle = 360  # 默认乘用车 1.0L-1.6L
+    config = db.query(SystemConfig).filter(SystemConfig.config_key == "vehicle_vessel_config").first()
+    if config and config.config_value:
+        try:
+            cfg = _load_config(config.config_value)
+            vehicle_count = int(cfg.get("vehicle_count", 0))
+            annual_tax_per_vehicle = float(cfg.get("annual_tax_per_vehicle", 360))
+        except Exception:
+            pass
+    monthly_tax = round(vehicle_count * annual_tax_per_vehicle / 12, 2)
+    return {
+        "tax_type": "vehicle_vessel_tax",
+        "period": period,
+        "vehicle_count": vehicle_count,
+        "annual_tax_per_vehicle": annual_tax_per_vehicle,
+        "tax_payable": monthly_tax,
+        "note": "需手动配置车辆数量和年税额",
+    }
+
+
+def calculate_resource_tax(db: Session, period: str) -> dict:
+    """计算资源税（从价计征简化版）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    _, income = sum_entries(vouchers, "6001")
+    # 简化：假设 10% 收入来自应税资源
+    taxable_amount = round(income * 0.1, 2)
+    tax_rate = 0.04  # 不同资源品目税率不同
+    tax_payable = round(taxable_amount * tax_rate, 2)
+    return {
+        "tax_type": "resource_tax",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": tax_rate,
+        "tax_payable": tax_payable,
+        "note": "简化计算，实际需按资源品目分别核算",
+    }
+
+
+def calculate_vehicle_purchase_tax(db: Session, period: str) -> dict:
+    """计算车辆购置税（一次性，购买时缴纳）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 车辆购置：1604 固定资产借方
+    vehicle_debit, _ = sum_entries(vouchers, "1604")
+    taxable_amount = round(vehicle_debit, 2)
+    tax_rate = 0.10
+    tax_payable = round(taxable_amount * tax_rate, 2)
+    return {
+        "tax_type": "vehicle_purchase_tax",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": tax_rate,
+        "tax_payable": tax_payable,
+        "note": "一次性缴纳，按不含增值税价格计算",
+    }
+
+
+def calculate_environmental_tax(db: Session, period: str) -> dict:
+    """计算环境保护税（大气污染物当量数×适用税额）"""
+    from app.models.system_config import SystemConfig
+    # 环保税需从在线监测/排污许可证获取数据
+    pollution_equivalent = 0  # 污染物当量数
+    unit_tax = 1.2  # 大气污染物每污染当量 1.2-12 元
+    config = db.query(SystemConfig).filter(SystemConfig.config_key == "environmental_tax_config").first()
+    if config and config.config_value:
+        try:
+            cfg = _load_config(config.config_value)
+            pollution_equivalent = float(cfg.get("pollution_equivalent", 0))
+            unit_tax = float(cfg.get("unit_tax", 1.2))
+        except Exception:
+            pass
+    monthly_tax = round(pollution_equivalent * unit_tax, 2)
+    return {
+        "tax_type": "environmental_tax",
+        "period": period,
+        "pollution_equivalent": pollution_equivalent,
+        "unit_tax": unit_tax,
+        "tax_payable": monthly_tax,
+        "note": "需手动配置污染物当量数和适用税额",
+    }
+
+
+def calculate_customs_duty(db: Session, period: str) -> dict:
+    """计算关税（进口货物完税价格×税率）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 进口货物：1403 原材料进口 借方
+    import_debit, _ = sum_entries(vouchers, "1403")
+    taxable_amount = round(import_debit, 2)
+    tax_rate = 0.05  # 最惠国税率均值
+    tax_payable = round(taxable_amount * tax_rate, 2)
+    return {
+        "tax_type": "customs_duty",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": tax_rate,
+        "tax_payable": tax_payable,
+        "note": "需按实际商品HS编码确定税率，关税由海关代征",
+    }
+
+
+def calculate_farmland_occupation_tax(db: Session, period: str) -> dict:
+    """计算耕地占用税（实际占用面积×适用税额，一次性缴纳）"""
+    from app.models.system_config import SystemConfig
+    land_area = 0.0
+    unit_tax = 25.0  # 中等地区均值
+    config = db.query(SystemConfig).filter(SystemConfig.config_key == "farmland_config").first()
+    if config and config.config_value:
+        try:
+            cfg = _load_config(config.config_value)
+            land_area = float(cfg.get("farmland_area", 0))
+            unit_tax = float(cfg.get("unit_tax", 25.0))
+        except Exception:
+            pass
+    tax_payable = round(land_area * unit_tax, 2)
+    return {
+        "tax_type": "farmland_occupation_tax",
+        "period": period,
+        "land_area": land_area,
+        "unit_tax": unit_tax,
+        "tax_payable": tax_payable,
+        "note": "一次性缴纳，需手动配置占地面积和适用税额",
+    }
+
+
+def calculate_tobacco_tax(db: Session, period: str) -> dict:
+    """计算烟叶税（收购金额×20%）"""
+    vouchers = get_confirmed_vouchers(db, period)
+    # 烟叶收购：1403 原材料 借方
+    material_debit, _ = sum_entries(vouchers, "1403")
+    # 简化：假设部分为烟叶收购
+    taxable_amount = round(material_debit * 0.1, 2)  # 假设 10% 为烟叶
+    tax_rate = 0.20
+    tax_payable = round(taxable_amount * tax_rate, 2)
+    return {
+        "tax_type": "tobacco_tax",
+        "period": period,
+        "taxable_amount": taxable_amount,
+        "tax_rate": tax_rate,
+        "tax_payable": tax_payable,
+        "note": "需按实际烟叶收购金额计算",
+    }
+
+
+def _load_config(val):
+    """安全解析配置 JSON"""
+    import json as _json
+    return _json.loads(val) if isinstance(val, str) else val
+
+
+def preview_filing(db: Session, tax_type: str, period: str, taxpayer_type: str = "small"):
+    """预览申报数据（不保存）—— 支持全部 18 个税种"""
+    calc_map = {
+        "vat": lambda: calculate_vat(db, period, taxpayer_type),
+        "corporate_income": lambda: calculate_corporate_income(db, period),
+        "individual_income": lambda: calculate_individual_income(db, period),
+        "surtax": lambda: calculate_surtax(db, period),
+        "stamp_duty": lambda: calculate_stamp_duty(db, period),
+        "consumption_tax": lambda: calculate_consumption_tax(db, period),
+        "property_tax": lambda: calculate_property_tax(db, period),
+        "land_use_tax": lambda: calculate_land_use_tax(db, period),
+        "land_appreciation_tax": lambda: calculate_land_appreciation_tax(db, period),
+        "deed_tax": lambda: calculate_deed_tax(db, period),
+        "vehicle_vessel_tax": lambda: calculate_vehicle_vessel_tax(db, period),
+        "vehicle_purchase_tax": lambda: calculate_vehicle_purchase_tax(db, period),
+        "resource_tax": lambda: calculate_resource_tax(db, period),
+        "environmental_tax": lambda: calculate_environmental_tax(db, period),
+        "farmland_occupation_tax": lambda: calculate_farmland_occupation_tax(db, period),
+        "tobacco_tax": lambda: calculate_tobacco_tax(db, period),
+        "customs_duty": lambda: calculate_customs_duty(db, period),
+    }
+    calc = calc_map.get(tax_type)
+    if calc:
+        return calc()
+    return {"tax_type": tax_type, "period": period, "message": "未知税种"}

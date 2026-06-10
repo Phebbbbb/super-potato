@@ -10,7 +10,7 @@ from app.models.rpa_task import RPATask
 from app.models.user import User
 from app.services.qr_service import create_trace
 from app.services.tax_service import preview_filing
-from app.services.auth import get_current_user, require_modify, check_client_access, check_optimistic_lock
+from app.services.auth import get_current_user, require_modify, require_not_client, check_client_access, check_optimistic_lock
 from app.services.version_control import commit
 from app.schemas.core import FilingCreate, FilingUpdate
 
@@ -25,6 +25,7 @@ def list_filings(
     status: str = None,
     client_id: str = Query(None),
     db: Session = Depends(get_db),
+    _=Depends(get_current_user),
 ):
     """纳税申报记录列表"""
     q = db.query(TaxFiling)
@@ -156,6 +157,10 @@ def create_filing(data: FilingCreate, db: Session = Depends(get_db), user: User 
     commit(db, "tax_filing", filing.id, "created", user.display_name or "",
            after={"tax_type": tax_type, "period": period, "client_id": data.client_id})
 
+    from app.services.audit_service import log_action
+    log_action(db, "filing", filing.id, "created", operator=user.display_name or user.username or "",
+               detail={"tax_type": tax_type, "period": period, "client_id": data.client_id})
+
     db.commit()
 
     return {
@@ -200,6 +205,10 @@ def update_filing(filing_id: str, data: FilingUpdate, db: Session = Depends(get_
         commit(db, "tax_filing", filing_id, "status_change", user.display_name or "",
                before={"status": old_status}, after={"status": f.status})
 
+    from app.services.audit_service import log_action
+    log_action(db, "filing", filing_id, "updated", operator=user.display_name or user.username or "",
+               detail={"tax_type": f.tax_type, "period": f.period, "client_id": f.client_id, "status": f.status})
+
     db.commit()
     return {"message": "申报状态已更新", "filing_id": filing_id, "status": f.status}
 
@@ -212,6 +221,10 @@ def delete_filing(filing_id: str, db: Session = Depends(get_db), user=Depends(re
         raise HTTPException(status_code=404, detail="申报记录不存在")
     if f.client_id and not check_client_access(f.client_id, user, db):
         raise HTTPException(status_code=403, detail="无权访问该客户数据")
+
+    from app.services.audit_service import log_action
+    log_action(db, "filing", filing_id, "deleted", operator=user.display_name or user.username or "",
+               detail={"tax_type": f.tax_type, "period": f.period, "client_id": f.client_id})
 
     commit(db, "tax_filing", filing_id, "deleted", user.display_name or "",
            before={"tax_type": f.tax_type, "period": f.period, "status": f.status})
@@ -228,7 +241,7 @@ def delete_filing(filing_id: str, db: Session = Depends(get_db), user=Depends(re
 
 
 @router.post("/preview")
-def preview_filing_data(data: dict, db: Session = Depends(get_db)):
+def preview_filing_data(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """预览申报数据 — 从已确认凭证自动计算，不保存"""
     tax_type = data.get("tax_type", "vat")
     period = data.get("period", "")
@@ -236,3 +249,64 @@ def preview_filing_data(data: dict, db: Session = Depends(get_db)):
     if not period:
         raise HTTPException(status_code=400, detail="请提供申报所属期")
     return preview_filing(db, tax_type, period, taxpayer_type)
+
+
+@router.get("/missing-filings")
+def scan_missing_filings(
+    period: str = Query(...),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """漏报扫描 — 遍历所有客户，检测指定期间哪些税种尚未申报"""
+    from app.models.client import Client
+
+    TAX_TYPE_NAMES = {
+        "vat": "增值税", "consumption_tax": "消费税", "corporate_income": "企业所得税",
+        "individual_income": "个人所得税", "surtax": "附加税", "stamp_duty": "印花税",
+        "property_tax": "房产税", "land_use_tax": "城镇土地使用税",
+        "land_appreciation_tax": "土地增值税", "deed_tax": "契税",
+        "vehicle_vessel_tax": "车船税", "vehicle_purchase_tax": "车辆购置税",
+        "resource_tax": "资源税", "environmental_tax": "环境保护税",
+        "farmland_occupation_tax": "耕地占用税", "tobacco_tax": "烟叶税", "customs_duty": "关税",
+    }
+
+    y, m = map(int, period.split("-"))
+
+    # 确定本期应报税种
+    monthly_types = ["vat", "surtax", "stamp_duty", "individual_income"]
+    is_quarter = m in (1, 4, 7, 10)
+    quarterly_types = ["corporate_income", "property_tax", "land_use_tax"] if is_quarter else []
+
+    clients = db.query(Client).all()
+    missing = []
+
+    for client in clients:
+        required = list(monthly_types)
+        if is_quarter:
+            required.extend(quarterly_types)
+        # 小规模纳税人增值税/附加税按季
+        if client.taxpayer_type == "small" and not is_quarter:
+            required = [t for t in required if t not in ("vat", "surtax")]
+
+        for tax_type in required:
+            existing = db.query(TaxFiling).filter(
+                TaxFiling.client_id == client.id,
+                TaxFiling.period == period,
+                TaxFiling.tax_type == tax_type,
+            ).first()
+            if not existing:
+                missing.append({
+                    "client_id": client.id,
+                    "client_name": client.name,
+                    "taxpayer_type": client.taxpayer_type or "small",
+                    "tax_type": tax_type,
+                    "tax_name": TAX_TYPE_NAMES.get(tax_type, tax_type),
+                    "period": period,
+                })
+
+    return {
+        "period": period,
+        "total_clients": len(clients),
+        "missing_count": len(missing),
+        "items": missing,
+    }

@@ -35,8 +35,8 @@ def validate_password_strength(password: str) -> str | None:
     return None
 
 
-def create_access_token(user: User) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
+def create_access_token(user: User, expires_minutes: int | None = None) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes or settings.jwt_expire_minutes)
     payload = {
         "sub": user.id,
         "username": user.username,
@@ -69,14 +69,21 @@ def get_current_user(
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != "admin":
+    if user.role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
     return user
 
 
 def require_modify(user: User = Depends(get_current_user)) -> User:
-    if user.role not in ("admin", "reviewer"):
+    if user.role not in ("admin", "super_admin", "reviewer"):
         raise HTTPException(status_code=403, detail="无修改权限，需管理员或审核员角色")
+    return user
+
+
+def require_not_client(user: User = Depends(get_current_user)) -> User:
+    """阻止 client 角色执行写操作"""
+    if user.role == "client":
+        raise HTTPException(status_code=403, detail="客户端用户仅可访问票据管理和AI顾问")
     return user
 
 
@@ -88,7 +95,7 @@ def get_user_client_ids(user: User, db: Session) -> set[str]:
 
 def check_client_access(client_id: str, user: User, db: Session) -> bool:
     """检查用户是否有权限访问指定客户"""
-    if user.role == "admin":
+    if user.role in ("admin", "super_admin"):
         return True
     return client_id in get_user_client_ids(user, db)
 
@@ -110,7 +117,7 @@ def require_client_access(
     db: Session = Depends(get_db),
 ) -> str:
     """依赖注入：校验当前用户有权访问指定客户，返回 client_id"""
-    if user.role == "admin":
+    if user.role in ("admin", "super_admin"):
         return client_id
     assignments = db.query(UserClientAssignment).filter(
         UserClientAssignment.user_id == user.id,
