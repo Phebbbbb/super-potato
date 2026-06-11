@@ -1,10 +1,12 @@
-"""Playwright 通用工具 v4 — tenacity重试 + 熔断器 + loguru结构化日志 + 多策略选择器"""
+"""Playwright 通用工具 v5 — session持久化 + 打码平台 + SMS API + 熔断器 + 多策略选择器"""
 
 import asyncio
+import json
+import os
 import random
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Callable, Awaitable
 
 from loguru import logger
@@ -14,6 +16,9 @@ from tenacity import (
 )
 
 SCREENSHOT_DIR = Path("screenshots")
+SESSION_DIR = Path("sessions")
+SESSION_DIR.mkdir(parents=True, exist_ok=True)
+SESSION_MAX_AGE_MINUTES = 50  # 税务局 session 通常 30-60 分钟过期
 
 
 # ============================================================
@@ -460,3 +465,413 @@ async def warmup_and_login(
             await asyncio.sleep(3 * (attempt + 1))
 
     return False
+
+
+# ============================================================
+# Session 持久化 — 人工登录一次，复用 N 次
+# ============================================================
+
+def _session_path(province: str) -> Path:
+    return SESSION_DIR / f"{province}_session.json"
+
+
+def is_session_valid(province: str) -> bool:
+    """检查已保存的 session 是否仍在有效期内"""
+    sp = _session_path(province)
+    if not sp.exists():
+        return False
+    mtime = datetime.fromtimestamp(sp.stat().st_mtime)
+    age = datetime.now() - mtime
+    return age < timedelta(minutes=SESSION_MAX_AGE_MINUTES)
+
+
+def session_age_minutes(province: str) -> float:
+    sp = _session_path(province)
+    if not sp.exists():
+        return float("inf")
+    mtime = datetime.fromtimestamp(sp.stat().st_mtime)
+    return (datetime.now() - mtime).total_seconds() / 60
+
+
+async def save_session(context, province: str) -> str:
+    """保存浏览器 storage state（cookies + localStorage + sessionStorage）到磁盘"""
+    sp = _session_path(province)
+    await context.storage_state(path=str(sp))
+    logger.info(f"[session] 已保存 {province} → {sp}")
+    return str(sp)
+
+
+async def load_session(context, province: str) -> bool:
+    """从磁盘加载已保存的 session。返回 True 表示加载成功。"""
+    sp = _session_path(province)
+    if not sp.exists():
+        logger.info(f"[session] {province} 无已保存 session")
+        return False
+    try:
+        state = json.loads(sp.read_text(encoding="utf-8"))
+        await context.add_cookies(state.get("cookies", []))
+        # localStorage/origins 通过 storage_state 参数在 new_context 时加载更可靠
+        logger.info(f"[session] 已加载 {province} (age={session_age_minutes(province):.0f}min)")
+        return True
+    except Exception as e:
+        logger.warning(f"[session] 加载失败 {province}: {e}")
+        return False
+
+
+# ============================================================
+# 打码平台集成 — YesCaptcha / 2Captcha（stub，需配置 API key 后激活）
+# ============================================================
+
+CAPTCHA_CLIENT_KEY = os.getenv("CAPTCHA_CLIENT_KEY", "")  # YesCaptcha 或 2Captcha 的 clientKey
+
+
+async def solve_captcha(page, service: str = "yescaptcha") -> Optional[str]:
+    """
+    自动识别并解决验证码（滑块 / 图形 / reCAPTCHA）
+    当前为 stub：未配置 CAPTCHA_CLIENT_KEY 时返回 None，由上层 fallback 到人工处理
+
+    支持的 service: yescaptcha (国内), 2captcha (国际)
+    激活方式: 设置环境变量 CAPTCHA_CLIENT_KEY=your_key
+    """
+    if not CAPTCHA_CLIENT_KEY:
+        return None  # stub 模式，上层走人工处理
+
+    import aiohttp
+
+    # 1. 判断验证码类型
+    captcha_type = None
+    if await page.locator('.slider-captcha, .slide-verify, .nc_wrapper, #nc_1_n1z').count() > 0:
+        captcha_type = "slider"
+    elif await page.locator('img[src*="captcha"], img[id*="captcha"], .captcha img').count() > 0:
+        captcha_type = "image"
+    else:
+        return None  # 未知类型
+
+    if captcha_type == "image":
+        captcha_el = page.locator('img[src*="captcha"], img[id*="captcha"], .captcha img').first
+        if await captcha_el.count() == 0:
+            return None
+        img_bytes = await captcha_el.screenshot(type="png")
+        import base64
+        img_b64 = base64.b64encode(img_bytes).decode()
+
+        api_url = (
+            "https://api.yescaptcha.com/createTask"
+            if service == "yescaptcha"
+            else "https://api.2captcha.com/createTask"
+        )
+        task_data = {
+            "clientKey": CAPTCHA_CLIENT_KEY,
+            "task": {
+                "type": "ImageToTextTask",
+                "body": img_b64,
+            },
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(api_url, json=task_data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    result = await resp.json()
+            if result.get("errorId") == 0:
+                code = result.get("solution", {}).get("text", "")
+                captcha_input = page.locator(
+                    'input[placeholder*="验证码"], input[name*="captcha"], input[id*="captcha"]'
+                ).first
+                if await captcha_input.count() > 0 and code:
+                    await captcha_input.fill(code.strip())
+                    logger.info(f"[打码] 图片验证码已自动填入: {code.strip()}")
+                    return code.strip()
+        except Exception as e:
+            logger.warning(f"[打码] 识别失败: {e}")
+
+    elif captcha_type == "slider":
+        api_url = (
+            "https://api.yescaptcha.com/createTask"
+            if service == "yescaptcha"
+            else "https://api.2captcha.com/createTask"
+        )
+        slider_data = {
+            "clientKey": CAPTCHA_CLIENT_KEY,
+            "task": {
+                "type": "NoCaptchaTaskProxyless" if service == "2captcha" else "SliderTask",
+                "websiteURL": page.url,
+            },
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(api_url, json=slider_data, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    result = await resp.json()
+            if result.get("errorId") == 0 and result.get("solution"):
+                logger.info("[打码] 滑块验证码已提交打码平台处理")
+                return "slider_task_created"
+        except Exception as e:
+            logger.warning(f"[打码] 滑块识别失败: {e}")
+
+    return None
+
+
+# ============================================================
+# SMS 验证码 API — 短信转发 / 接码平台（stub，需配置后激活）
+# ============================================================
+
+SMS_API_ENDPOINT = os.getenv("SMS_API_ENDPOINT", "")
+SMS_API_KEY = os.getenv("SMS_API_KEY", "")
+
+
+async def get_sms_code(phone: str, timeout: int = 60) -> Optional[str]:
+    """
+    从短信转发服务获取验证码
+    当前为 stub：未配置 SMS_API_ENDPOINT 时返回 None，由上层 fallback 到人工输入
+
+    激活方式: 设置环境变量
+      SMS_API_ENDPOINT=https://your-sms-relay.com/api/latest-sms
+      SMS_API_KEY=your_key
+    """
+    if not SMS_API_ENDPOINT or not SMS_API_KEY:
+        return None
+
+    import aiohttp
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    SMS_API_ENDPOINT,
+                    params={"phone": phone, "limit": 1},
+                    headers={"Authorization": f"Bearer {SMS_API_KEY}"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json()
+            if data.get("messages"):
+                latest = data["messages"][0]
+                # 提取6位数字验证码
+                import re
+                match = re.search(r"\d{4,6}", latest.get("content", ""))
+                if match:
+                    code = match.group()
+                    logger.info(f"[SMS] 自动获取验证码: {code}")
+                    return code
+        except Exception as e:
+            logger.warning(f"[SMS] 查询失败: {e}")
+        await asyncio.sleep(5)
+    return None
+
+
+# ============================================================
+# 交互式登录 — Session 持久化核心流程
+# ============================================================
+
+class SessionExpired(Exception):
+    """Session 已过期，需重新人工登录"""
+    def __init__(self, province: str, message: str = ""):
+        self.province = province
+        self.message = message or f"Session for {province} expired, manual re-login required"
+        super().__init__(self.message)
+
+
+async def interactive_login(
+    page,
+    login_url: str,
+    login_selectors: dict,
+    province: str,
+    credentials: dict,
+    max_wait_seconds: int = 120,
+) -> bool:
+    """
+    交互式登录流程 — 打开可见浏览器，自动填写已知凭据，检测到验证码/SMS/UKey 时等待人工操作
+
+    流程：
+    1. 导航到登录页
+    2. 自动填写用户名密码（如果有）
+    3. 检测验证码 → 尝试打码平台 → 失败则等人
+    4. 检测 SMS 输入框 → 尝试 SMS API → 失败则等人
+    5. 检测 UKey 提示 → 等人插 UKey
+    6. 等待 URL 变化为 dashboard/portal → 登录成功
+    7. 保存 session
+
+    Returns: True if login successful and session saved
+    """
+    if not await safe_goto(page, login_url):
+        logger.error(f"[登录] 无法访问登录页 {login_url}")
+        return False
+
+    await asyncio.sleep(2)
+
+    # 检查是否已登录
+    page_url = page.url.lower()
+    if any(kw in page_url for kw in ["dashboard", "home", "main", "portal", "workbench"]):
+        logger.info(f"[登录] 已有有效 session，跳过登录")
+        return True
+
+    # Step 1: 自动填写凭据
+    username = credentials.get("username", "")
+    password = credentials.get("password", "")
+    phone = credentials.get("phone", "")
+
+    if username:
+        await safe_fill(page, "税号", username, [login_selectors.get("username", "")])
+    if password:
+        await safe_fill(page, "密码", password, [login_selectors.get("password", "")])
+
+    # Step 2: 按需尝试填手机号
+    if phone:
+        try:
+            phone_input = page.locator('input[placeholder*="手机"], input[type="tel"]').first
+            if await phone_input.count() > 0:
+                await phone_input.fill(phone)
+        except Exception:
+            pass
+
+    await page.screenshot(path=str(SCREENSHOT_DIR / f"login_{province}_pre_check.png"))
+
+    # Step 3: 检测验证码 → 打码平台 / 人工
+    if await detect_captcha(page):
+        solved = await solve_captcha(page)
+        if solved:
+            logger.info(f"[登录] 打码平台已处理验证码")
+        else:
+            logger.info(f"[登录] 检测到验证码，等待人工处理（{max_wait_seconds}s）...")
+            await page.screenshot(
+                path=str(SCREENSHOT_DIR / f"login_{province}_needs_human.png")
+            )
+
+    # Step 4: 检测 SMS 输入框 → SMS API / 人工
+    sms_input = page.locator(
+        'input[placeholder*="短信"], input[placeholder*="验证码"], input[name*="sms"], input[name*="verify"]'
+    ).first
+    if await sms_input.count() > 0:
+        if phone:
+            sms_code = await get_sms_code(phone, timeout=30)
+            if sms_code:
+                await sms_input.fill(sms_code)
+                logger.info(f"[登录] SMS 验证码已自动填入")
+            else:
+                logger.info(f"[登录] 等待人工输入 SMS 验证码...")
+
+    # Step 5: 点击登录（如果还没自动跳转）
+    await safe_click(page, "登录", [login_selectors.get("submit", "")])
+    await asyncio.sleep(2)
+
+    # Step 6: 等待登录完成 — 轮询 URL + 检测二次验证
+    logger.info(f"[登录] 等待登录完成（最多 {max_wait_seconds}s）...")
+    deadline = time.monotonic() + max_wait_seconds
+
+    while time.monotonic() < deadline:
+        try:
+            page_url = page.url.lower()
+
+            # 成功标志：进入 dashboard/home/main/portal/workbench
+            if any(kw in page_url for kw in ["dashboard", "home", "main", "portal", "workbench", "invoice"]):
+                logger.info(f"[登录] 成功 → {page_url}")
+                return True
+
+            # 仍在登录页，检查是否有新的验证码/SMS/UKey 提示
+            if await detect_captcha(page):
+                await solve_captcha(page)  # 再试一次打码平台
+                await asyncio.sleep(2)
+
+            # 检测 UKey 提示
+            ukey_hints = page.locator(
+                'text=插入, text=UKey, text=税控盘, text=金税盘, text=USB Key, text=数字证书'
+            ).first
+            if await ukey_hints.count() > 0:
+                logger.info(f"[登录] 检测到 UKey 提示，等待插入硬件...")
+                await page.screenshot(
+                    path=str(SCREENSHOT_DIR / f"login_{province}_ukey_required.png")
+                )
+                # UKey 是老税号客户的硬障碍，等待人工操作
+                await asyncio.sleep(5)  # 给用户时间插 UKey
+
+            # 检测错误消息
+            error_msg = page.locator(
+                'text=密码错误, text=账号不存在, text=验证码错误, text=登录失败'
+            ).first
+            if await error_msg.count() > 0:
+                error_text = await error_msg.text_content() or "登录失败"
+                logger.error(f"[登录] 错误: {error_text}")
+                await page.screenshot(
+                    path=str(SCREENSHOT_DIR / f"login_{province}_error.png")
+                )
+
+        except Exception:
+            pass
+
+        await asyncio.sleep(3)
+
+    logger.error(f"[登录] 超时（{max_wait_seconds}s），仍未检测到登录成功")
+    await page.screenshot(path=str(SCREENSHOT_DIR / f"login_{province}_timeout.png"))
+    return False
+
+
+# ============================================================
+# Session 保活 — 定时刷新防止过期
+# ============================================================
+
+async def keep_session_alive(page, province: str, target_url: str) -> bool:
+    """访问目标页面保持 session 活跃，返回是否需要重新登录"""
+    try:
+        await page.goto(target_url, timeout=15000, wait_until="domcontentloaded")
+        await asyncio.sleep(1)
+
+        page_url = page.url.lower()
+        # 检查是否被重定向到登录页（session 过期标志）
+        if any(kw in page_url for kw in ["login", "signin", "auth", "cas"]):
+            logger.warning(f"[保活] {province} session 已过期，重定向到登录页")
+            return False
+
+        # 轻量操作：滚动页面触发 ajax
+        await page.evaluate("window.scrollTo(0, 300)")
+        await asyncio.sleep(0.5)
+        await page.evaluate("window.scrollTo(0, 0)")
+
+        logger.debug(f"[保活] {province} session 刷新成功")
+        return True
+    except Exception as e:
+        logger.warning(f"[保活] {province} 异常: {e}")
+        return False
+
+
+async def ensure_valid_session(
+    context,
+    page,
+    province: str,
+    login_url: str,
+    target_url: str,
+    login_selectors: dict,
+    credentials: dict,
+) -> bool:
+    """
+    确保 session 有效 — 处理完整生命周期：
+    1. 有有效 session → 直接用
+    2. Session 过期 → 重新交互式登录
+    3. 无 session → 交互式登录
+    4. Session 过期且登录失败 → raise SessionExpired
+
+    Returns: True if session is ready to use
+    """
+    if is_session_valid(province):
+        # 尝试用已保存 session 访问目标页面
+        if await keep_session_alive(page, province, target_url):
+            logger.info(f"[session] {province} 复用有效 session (age={session_age_minutes(province):.0f}min)")
+            return True
+        else:
+            logger.info(f"[session] {province} session 已过期，需重新登录")
+
+    # 需要重新登录
+    logger.info(f"[session] {province} 开始交互式登录...")
+    success = await interactive_login(
+        page=page,
+        login_url=login_url,
+        login_selectors=login_selectors,
+        province=province,
+        credentials=credentials,
+    )
+
+    if success:
+        await save_session(context, province)
+        return True
+
+    raise SessionExpired(
+        province,
+        f"无法完成 {province} 登录。请检查: 1) 网络连通 2) 账号密码 3) UKey(老税号) 4) 短信验证码",
+    )

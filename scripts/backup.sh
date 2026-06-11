@@ -33,12 +33,21 @@ if echo "$DB_URL" | grep -q "^postgresql://"; then
         --no-owner --no-acl | gzip > "$BACKUP_FILE"
 
 elif echo "$DB_URL" | grep -q "^sqlite:///"; then
-    # SQLite: 直接文件复制
     DB_PATH=$(echo "$DB_URL" | sed 's|sqlite:///||')
     BACKUP_FILE="$BACKUP_DIR/smarttax_$TIMESTAMP.db.gz"
     echo "SQLite: $DB_PATH → $BACKUP_FILE"
     if [ -f "$DB_PATH" ]; then
-        sqlite3 "$DB_PATH" ".backup /dev/stdout" | gzip > "$BACKUP_FILE"
+        # 用 Python sqlite3.backup() 保证事务一致性
+        python -c "
+import sqlite3, gzip
+src = sqlite3.connect('$DB_PATH')
+dst = sqlite3.connect('/tmp/_backup_tmp.db')
+src.backup(dst)
+src.close(); dst.close()
+" 2>/dev/null && gzip -c /tmp/_backup_tmp.db > "$BACKUP_FILE" && rm -f /tmp/_backup_tmp.db || {
+            echo '  Python backup 不可用，降级为 cp...'
+            cp "$DB_PATH" /tmp/_backup_tmp.db && gzip -c /tmp/_backup_tmp.db > "$BACKUP_FILE" && rm -f /tmp/_backup_tmp.db
+        }
     else
         echo "警告: 数据库文件 $DB_PATH 不存在"
         exit 1

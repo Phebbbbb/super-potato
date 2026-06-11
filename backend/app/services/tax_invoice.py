@@ -3,7 +3,12 @@ import os
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from app.services.playwright_helpers import safe_fill, safe_click, detect_captcha, retry_with_backoff, NeedHumanReview, safe_goto, detect_anti_bot, save_debug_snapshot
+from app.services.playwright_helpers import (
+    safe_fill, safe_click, detect_captcha, retry_with_backoff,
+    NeedHumanReview, safe_goto, detect_anti_bot, save_debug_snapshot,
+    is_session_valid, save_session, ensure_valid_session, SessionExpired,
+    SESSION_DIR, SESSION_MAX_AGE_MINUTES,
+)
 from app.services.error_handler import log_error, log_info
 
 SCREENSHOT_DIR = Path("screenshots/invoices")
@@ -282,7 +287,7 @@ async def issue_invoice_playwright(
 ) -> dict:
     """
     自动登录电子税务局 → 进入数电票开票 → 填写购方/商品 → 提交开票 → 截图留证
-    v2: 使用精确 CSS 选择器 + 多策略回退
+    v3: session持久化 — 人工登录一次，有效期内复用，过期再提示登录
     """
     if items is None:
         items = []
@@ -301,7 +306,7 @@ async def issue_invoice_playwright(
     bureau = BUREAU_CONFIGS.get(province, BUREAU_CONFIGS["generic"])
     username = (tax_credentials or {}).get("username", "")
     password = (tax_credentials or {}).get("password", "")
-    login_s = bureau["login_selectors"]
+    phone = (tax_credentials or {}).get("phone", "")
     inv_s = bureau["invoice_selectors"]
 
     result = {
@@ -310,43 +315,63 @@ async def issue_invoice_playwright(
         "screenshot": "", "message": "",
     }
 
+    if not username:
+        result["message"] = "未配置电子税务局账号，请在 Settings → 系统配置中设置 tax_bureau_auth"
+        return result
+
     rid = invoice_id[:8]
+    session_file = str(SESSION_DIR / f"{province}_session.json")
+    use_saved_session = is_session_valid(province)
+
+    # 如果有有效 session → headless；否则 → headed（需要人工登录）
+    should_headless = config["headless"] and use_saved_session
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=config["headless"])
-        context = await browser.new_context(viewport={"width": 1366, "height": 768}, locale="zh-CN")
+        browser = await p.chromium.launch(headless=should_headless)
+
+        # 构建 context — 如果有已保存 session 则加载
+        context_kwargs = {"viewport": {"width": 1366, "height": 768}, "locale": "zh-CN"}
+        if use_saved_session and Path(session_file).exists():
+            context_kwargs["storage_state"] = session_file
+            log_info("tax_invoice", "session_reuse", f"invoice={rid} province={province} mode=session-first")
+
+        context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
 
         try:
-            # === Step 1: 登录 ===
-            log_info("tax_invoice", "step1_login", f"invoice={rid} province={province}")
-            await safe_goto(page, bureau["login_url"], timeout=config["timeout"])
-            await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_01_login.png"))
+            # === Step 0: Session 管理 ===
+            session_ok = use_saved_session
+            if not use_saved_session:
+                # 尝试交互式登录（headed 模式 — 人工参与）
+                log_info("tax_invoice", "session_login", f"invoice={rid} province={province} mode=interactive")
+                if should_headless:
+                    # 后台模式无法交互 → 返回明确指引
+                    result["message"] = (
+                        f"{province} 无有效 session，请先通过前端或 API 触发一次人工登录建立 session。"
+                        f"Session 有效期约 {SESSION_MAX_AGE_MINUTES} 分钟。"
+                    )
+                    await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_no_session.png"))
+                    return result
 
-            if not username:
-                result["message"] = "未配置电子税务局账号，请在 Settings → 系统配置中设置 tax_bureau_auth"
+                session_ok = await ensure_valid_session(
+                    context=context,
+                    page=page,
+                    province=province,
+                    login_url=bureau["login_url"],
+                    target_url=bureau["invoice_url"],
+                    login_selectors=bureau["login_selectors"],
+                    credentials={"username": username, "password": password, "phone": phone},
+                )
+                if not session_ok:
+                    result["message"] = f"{province} 登录失败或超时"
+                    return result
+
+            if not session_ok:
+                result["message"] = f"{province} session 无效且无法重新登录"
                 return result
 
-            await _fill_by_selectors(page, login_s["username"], username, "用户名")
-            await _fill_by_selectors(page, login_s["password"], password, "密码")
-            await _click_by_selectors(page, login_s["submit"], "登录按钮")
-            try: await page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception: await asyncio.sleep(2)
-
-            # 检测验证码
-            if await detect_captcha(page):
-                cap_path = str(SCREENSHOT_DIR / f"captcha_{rid}.png")
-                await page.screenshot(path=cap_path)
-                log_error("tax_invoice", NeedHumanReview("检测到验证码"), {"invoice_id": rid})
-                result["message"] = "检测到验证码，需人工登录后重试"
-                result["screenshot"] = cap_path
-                return result
-
-            # 检测反爬/风控
-            risk = await detect_anti_bot(page)
-            if risk:
-                result["message"] = f"检测到风控限制 ({risk})，请稍后再试或切换网络"
-                return result
+            log_info("tax_invoice", "step1_session_ok", f"invoice={rid} province={province}")
+            await page.screenshot(path=str(SCREENSHOT_DIR / f"invoice_{rid}_01_session_ok.png"))
 
             # === Step 2: 导航到开票页 ===
             log_info("tax_invoice", "step2_navigate", f"invoice={rid}")
@@ -427,6 +452,9 @@ async def issue_invoice_playwright(
             result["message"] = "发票开具成功" if success else "发票已提交，请登录电子税务局确认开具结果"
             result["invoice_code"] = f"AUTO-{rid}"
             log_info("tax_invoice", "done", f"invoice={rid} success={success}")
+
+            # 刷新 session 有效期（成功一次自动续期）
+            await save_session(context, province)
 
             return result
 

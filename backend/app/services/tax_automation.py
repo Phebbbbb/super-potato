@@ -25,7 +25,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
-from app.services.playwright_helpers import detect_captcha, detect_anti_bot, retry_with_backoff, safe_goto, save_debug_snapshot
+from app.services.playwright_helpers import (
+    detect_captcha, detect_anti_bot, retry_with_backoff, safe_goto, save_debug_snapshot,
+    is_session_valid, save_session, ensure_valid_session, SessionExpired,
+    SESSION_DIR, SESSION_MAX_AGE_MINUTES,
+)
 from app.services.error_handler import log_error, log_info
 
 
@@ -540,7 +544,7 @@ _NEW_TAX_SELECTORS = {
 }
 
 # 合并到所有省份配置
-for _profile_name, _profile_config in TAX_PROFILES.items():
+for _profile_name, _profile_config in TAX_BUREAU_CONFIGS.items():
     if "filing_selectors" in _profile_config:
         _profile_config["filing_selectors"].update(_NEW_TAX_SELECTORS)
 
@@ -709,49 +713,54 @@ class TaxAutomationEngine:
                 message=f"省份配置 [{self.profile}] 未设置 login_url，请在 TAX_BUREAU_CONFIGS 中补充",
             )
 
+        session_file = str(SESSION_DIR / f"{self.profile}_session.json")
+        use_saved_session = is_session_valid(self.profile)
+        should_headless = self.headless and use_saved_session
+
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self.headless)
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-            )
+            browser = await p.chromium.launch(headless=should_headless)
+            context_kwargs: dict = {"viewport": {"width": 1920, "height": 1080}, "locale": "zh-CN"}
+            if use_saved_session and Path(session_file).exists():
+                context_kwargs["storage_state"] = session_file
+                log_info("tax_auto", "session_reuse", f"profile={self.profile}")
+
+            context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
 
             try:
-                # ===== Step 1: 登录 =====
-                print(f"[自动申报] 登录 {self.config['name']}...")
-                if not await safe_goto(page, login_url, timeout=self.timeout):
+                # ===== Step 0: Session 管理 =====
+                log_info("tax_auto", "session_mgmt", f"profile={self.profile} saved={use_saved_session} headless={should_headless}")
+                session_ok = use_saved_session
+
+                if not use_saved_session:
+                    if should_headless:
+                        return FilingResult(
+                            success=False,
+                            message=f"{self.profile} 无有效 session，请先通过 API 触发一次人工登录。Session 有效期约 {SESSION_MAX_AGE_MINUTES} 分钟。",
+                            failed_step="no_session",
+                        )
+                    session_ok = await ensure_valid_session(
+                        context=context, page=page, province=self.profile,
+                        login_url=login_url,
+                        target_url=login_url,  # 登录后的起始页就是 login_url 跳转后的页面
+                        login_selectors=self.config["login_selectors"],
+                        credentials=credentials,
+                    )
+                    if not session_ok:
+                        return FilingResult(
+                            success=False, tax_type=tax_type, period=period,
+                            message=f"{self.config['name']} 登录失败或超时",
+                            screenshot_paths=screenshots, failed_step="login",
+                        )
+
+                if not session_ok:
                     return FilingResult(
-                        success=False,
-                        message=f"无法访问 {self.config['name']} ({login_url})，请检查网络或URL配置",
-                        failed_step="goto_login",
+                        success=False, tax_type=tax_type, period=period,
+                        message="Session 无效且无法重新登录",
+                        screenshot_paths=screenshots, failed_step="session",
                     )
 
-                login_s = self.config["login_selectors"]
-                await self._safe_fill(page, login_s["username"], credentials.get("username", ""), "用户名")
-                await self._safe_fill(page, login_s["password"], credentials.get("password", ""), "密码")
-
-                # 检测验证码
-                if await detect_captcha(page):
-                    captcha_path = await self._screenshot(page, "captcha")
-                    screenshots.append(captcha_path)
-                    log_info("tax_auto", "captcha_detected", f"screenshot={captcha_path}")
-                    print(f"[自动申报] ⚠️ 检测到验证码（截图: {captcha_path}），需人工处理")
-                    if not self.headless:
-                        captcha_input = login_s.get("captcha_input")
-                        if captcha_input:
-                            await page.wait_for_function(
-                                f"document.querySelector('{captcha_input}')?.value?.length >= 4",
-                                timeout=self.timeout * 2,
-                            )
-
-                await self._safe_click(page, login_s["submit"], "登录按钮")
-                await page.wait_for_timeout(3000)
-
-                login_ok = await self._check_login_success(page)
-                await self._screenshot(page, "after_login")
-
-                # 登录后检测风控
+                # 检测反爬
                 anti_bot_risk = await detect_anti_bot(page)
                 if anti_bot_risk:
                     await self._save_debug(page, f"anti_bot_{anti_bot_risk}")
@@ -761,16 +770,9 @@ class TaxAutomationEngine:
                         screenshot_paths=screenshots, failed_step=f"anti_bot_{anti_bot_risk}",
                         steps_completed=steps_completed,
                     )
-                screenshots.append(str(self.screenshot_dir / f"{self.run_id}_after_login.png"))
 
-                if not login_ok:
-                    await self._save_debug(page, "login_failed")
-                    return FilingResult(
-                        success=False, tax_type=tax_type, period=period,
-                        message="登录失败：用户名或密码错误，或触发风控验证。请检查电子税务局凭据。",
-                        screenshot_paths=screenshots, failed_step="login",
-                        steps_completed=["goto_login", "fill_credentials"],
-                    )
+                await self._screenshot(page, "after_login")
+                screenshots.append(str(self.screenshot_dir / f"{self.run_id}_after_login.png"))
 
                 steps_completed.append("login")
                 log_info("tax_auto", "login_ok", f"profile={self.profile}")
@@ -904,6 +906,10 @@ class TaxAutomationEngine:
                     steps_completed=steps_completed,
                 )
 
+                # 刷新 session 有效期
+                if success:
+                    await save_session(context, self.profile)
+
             except Exception as e:
                 log_error("tax_auto", e, {"tax_type": tax_type, "period": period, "run_id": self.run_id})
                 failed_step = steps_completed[-1] if steps_completed else "unknown"
@@ -970,11 +976,17 @@ class TaxAutomationEngine:
 
         checkpoint_engine = get_checkpoint_engine()
 
+        session_file = str(SESSION_DIR / f"{self.profile}_session.json")
+        use_saved_session = is_session_valid(self.profile)
+        should_headless = self.headless and use_saved_session
+
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self.headless)
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080}, locale="zh-CN",
-            )
+            browser = await p.chromium.launch(headless=should_headless)
+            context_kwargs: dict = {"viewport": {"width": 1920, "height": 1080}, "locale": "zh-CN"}
+            if use_saved_session and Path(session_file).exists():
+                context_kwargs["storage_state"] = session_file
+
+            context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
 
             try:
@@ -983,27 +995,29 @@ class TaxAutomationEngine:
                 filing_configs = self.config.get("filing_selectors", {})
                 filing_s = filing_configs.get(tax_type, filing_configs.get("vat", {}))
 
-                # 构建步骤函数闭包
+                # 构建步骤函数闭包（session-first）
                 async def step_login(p):
-                    if not await safe_goto(p, login_url, timeout=self.timeout):
-                        raise Exception(f"无法访问 {login_url}")
-                    await self._safe_fill(p, login_s["username"], credentials.get("username", ""), "用户名")
-                    await self._safe_fill(p, login_s["password"], credentials.get("password", ""), "密码")
-                    if await detect_captcha(p):
-                        captcha_path = await self._screenshot(p, "captcha")
-                        screenshots.append(captcha_path)
-                        if not self.headless:
-                            captcha_input = login_s.get("captcha_input")
-                            if captcha_input:
-                                await p.wait_for_function(
-                                    f"document.querySelector('{captcha_input}')?.value?.length >= 4",
-                                    timeout=self.timeout * 2,
-                                )
-                    await self._safe_click(p, login_s["submit"], "登录按钮")
-                    await p.wait_for_timeout(3000)
-                    if not await self._check_login_success(p):
-                        raise Exception("登录失败：用户名或密码错误")
-                    return True
+                    if use_saved_session:
+                        # 已有 session，验证可用性
+                        try:
+                            await p.goto(login_url, timeout=self.timeout, wait_until="domcontentloaded")
+                            await p.wait_for_timeout(2000)
+                            if await self._check_login_success(p):
+                                return True
+                        except Exception:
+                            pass
+                        # session 过期，回退到交互式登录
+                        return await ensure_valid_session(
+                            context=context, page=p, province=self.profile,
+                            login_url=login_url, target_url=login_url,
+                            login_selectors=login_s, credentials=credentials,
+                        )
+                    else:
+                        return await ensure_valid_session(
+                            context=context, page=p, province=self.profile,
+                            login_url=login_url, target_url=login_url,
+                            login_selectors=login_s, credentials=credentials,
+                        )
 
                 async def step_navigate(p):
                     await self._safe_click(p, filing_s.get("menu_declare", ""), "我要办税")

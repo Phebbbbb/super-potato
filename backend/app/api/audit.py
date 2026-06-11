@@ -9,6 +9,7 @@ from app.db import get_db
 from app.models.voucher import AccountingVoucher
 from app.models.filing import TaxFiling
 from app.models.audit_log import AuditLog
+from app.services.auth import get_current_user
 from app.services.batch_audit_engine import run_batch_audit, AUDIT_RULES
 from sqlalchemy import func
 
